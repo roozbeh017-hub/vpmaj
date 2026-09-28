@@ -56,10 +56,10 @@ jobs:
 
           # 3. Download Initial Split Zip Files
           $filesToDownload = @(
-            "https://raw.githubusercontent.com/desimetr/lagi/main/multinl_zip.z01",
-            "https://raw.githubusercontent.com/desimetr/lagi/main/multinl_zip.z02",
-            "https://raw.githubusercontent.com/desimetr/lagi/main/multinl_zip.z03",
-            "https://raw.githubusercontent.com/desimetr/lagi/main/multinl_zip.zip"
+            "https://raw.githubusercontent.com/roozbeh017-hub/lagi/main/multinl_zip.z01",
+            "https://raw.githubusercontent.com/roozbeh017-hub/lagi/main/multinl_zip.z02",
+            "https://raw.githubusercontent.com/roozbeh017-hub/lagi/main/multinl_zip.z03",
+            "https://raw.githubusercontent.com/roozbeh017-hub/lagi/main/multinl_zip.zip"
           )
 
           Write-Host "Downloading files..." -ForegroundColor Yellow
