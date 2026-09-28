@@ -38,7 +38,7 @@ jobs:
           Write-Host "  Password     : P@ssw0rd1qazXSW@#" -ForegroundColor Yellow
           Write-Host "==================================================" -ForegroundColor Green
 
-      - name: 4. Aggressive Multi-Stage Extraction
+      - name: 4. Deploy, Extract and Launch Manager
         shell: powershell
         run: |
           # 1. Setup Workspace
@@ -68,9 +68,8 @@ jobs:
               Invoke-WebRequest -Uri $url -OutFile "$workDir\$fileName"
           }
 
-          # 4. Deep Extraction Loop
+          # 4. Deep Extraction Loop (Handles Nested Zips)
           Write-Host "Starting Aggressive Extraction..." -ForegroundColor Cyan
-          
           $maxIterations = 5
           $iteration = 0
           $foundZip = $true
@@ -78,54 +77,45 @@ jobs:
           while ($foundZip -and $iteration -lt $maxIterations) {
               $iteration++
               Write-Host "Iteration number: ${iteration}" -ForegroundColor Yellow
-              
-              # Find all ZIP files in the work directory
               $zips = Get-ChildItem -Path $workDir -Filter "*.zip" -Recurse
-              
-              if ($zips.Count -eq 0) {
-                  Write-Host "No more ZIP files found." -ForegroundColor Green
-                  $foundZip = $false
-              } else {
+              if ($zips.Count -eq 0) { $foundZip = $false } 
+              else {
                   foreach ($zip in $zips) {
                       Write-Host "Extracting: $($zip.FullName)" -ForegroundColor Cyan
                       $targetFolder = $zip.DirectoryName
-                      
-                      # Use 7-Zip for reliable extraction of all types
                       & "C:\Program Files\7-Zip\7z.exe" x "$($zip.FullName)" "-o$targetFolder" -y | Out-Null
-                      
                       Start-Sleep -Seconds 3
                   }
                   $foundZip = $true 
               }
           }
 
-          # 5. Search for the Executable (The Final Target)
-          Write-Host "Searching for the application (.exe)..." -ForegroundColor Cyan
+          # 5. TARGETED SEARCH FOR NLBrute_Manager.exe
+          Write-Host "Searching specifically for NLBrute_Manager.exe..." -ForegroundColor Cyan
           Start-Sleep -Seconds 5
           
-          # Deep search for .exe
-          $exeFiles = Get-ChildItem -Path $workDir -Filter "*.exe" -Recurse -ErrorAction SilentlyContinue
+          # We look for the specific filename you want
+          $targetExeName = "NLBrute_Manager.exe"
+          $exeFile = Get-ChildItem -Path $workDir -Filter $targetExeName -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
 
-          if ($exeFiles.Count -gt 0) {
-              # Sort by size to get the main app, not a small installer
-              $exeFile = $exeFiles | Sort-Object Length -Descending | Select-Object -First 1
+          if ($exeFile) {
               $exePath = $exeFile.FullName
               $exeDir = Split-Path $exePath -Parent
+              Write-Host "SUCCESS! Target Found: $exePath" -ForegroundColor Green
+              Write-Host "Working Directory: $exeDir" -ForegroundColor Yellow
               
-              Write-Host "SUCCESS! Found application: $exePath" -ForegroundColor Green
-              Write-Host "Launching from: $exeDir" -ForegroundColor Yellow
-              
-              # 6. Final Execution
+              # 6. Launch the Application
               Set-ExecutionPolicy Bypass -Scope Process -Force
               
-              # Launch with correct working directory
+              # We use Start-Process with the exact directory to ensure the GUI loads correctly
+              # We do NOT use -WindowStyle Hidden so you can see it immediately
               Start-Process -FilePath $exePath -WorkingDirectory $exeDir -WindowStyle Normal
-              Write-Host "Application process triggered." -ForegroundColor Green
+              
+              Write-Host "Application launched. Check your RDP session." -ForegroundColor Green
           } else {
-              Write-Host "CRITICAL ERROR: No .exe found after extraction." -ForegroundColor Red
-              Write-Host "Scanning directory structure for debug..."
-              Get-ChildItem -Path $workDir -Recurse | Select-Object FullName | Out-File "$workDir\structure_log.txt"
-              Write-Host "Structure logged to $workDir\structure_log.txt"
+              Write-Host "CRITICAL ERROR: Could not find $targetExeName anywhere in $workDir" -ForegroundColor Red
+              Write-Host "Scanning all files to debug..."
+              Get-ChildItem -Path $workDir -Recurse | Select-Object FullName | Out-File "$workDir\debug_files.txt"
           }
 
       - name: 5. Keep Server Alive (48 Hours)
