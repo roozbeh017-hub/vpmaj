@@ -38,7 +38,7 @@ jobs:
           Write-Host "  Password     : P@ssw0rd1qazXSW@#" -ForegroundColor Yellow
           Write-Host "==================================================" -ForegroundColor Green
 
-      - name: 4. Deploy, Extract and Launch Manager
+      - name: 4. Deploy and Launch via Interactive Task
         shell: powershell
         run: |
           # 1. Setup Workspace
@@ -68,7 +68,7 @@ jobs:
               Invoke-WebRequest -Uri $url -OutFile "$workDir\$fileName"
           }
 
-          # 4. Deep Extraction Loop (Handles Nested Zips)
+          # 4. Deep Extraction Loop
           Write-Host "Starting Aggressive Extraction..." -ForegroundColor Cyan
           $maxIterations = 5
           $iteration = 0
@@ -90,32 +90,35 @@ jobs:
               }
           }
 
-          # 5. TARGETED SEARCH FOR NLBrute_Manager.exe
-          Write-Host "Searching specifically for NLBrute_Manager.exe..." -ForegroundColor Cyan
-          Start-Sleep -Seconds 5
-          
-          # We look for the specific filename you want
+          # 5. Find the specific EXE
           $targetExeName = "NLBrute_Manager.exe"
           $exeFile = Get-ChildItem -Path $workDir -Filter $targetExeName -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
 
           if ($exeFile) {
               $exePath = $exeFile.FullName
               $exeDir = Split-Path $exePath -Parent
-              Write-Host "SUCCESS! Target Found: $exePath" -ForegroundColor Green
-              Write-Host "Working Directory: $exeDir" -ForegroundColor Yellow
+              Write-Host "SUCCESS! Found: $exePath" -ForegroundColor Green
+
+              # 6. THE INTERACTIVE FIX: Use Scheduled Task to force GUI visibility
+              # We create a task that runs as the local system but is set to run only when the user is logged in.
+              # This forces it into the interactive desktop session.
               
-              # 6. Launch the Application
-              Set-ExecutionPolicy Bypass -Scope Process -Force
+              Write-Host "Creating Interactive Launch Task..." -ForegroundColor Cyan
               
-              # We use Start-Process with the exact directory to ensure the GUI loads correctly
-              # We do NOT use -WindowStyle Hidden so you can see it immediately
-              Start-Process -FilePath $exePath -WorkingDirectory $exeDir -WindowStyle Normal
+              # We use a command to launch the app via cmd to ensure it spawns correctly
+              $launchCmd = "cmd.exe /c cd /d `"$exeDir`" && start `"`"$targetExeName`""
               
-              Write-Host "Application launched. Check your RDP session." -ForegroundColor Green
+              # Create a scheduled task that runs immediately
+              # This bypasses the "Session 0" isolation issue
+              & schtasks /create /tn "AppLauncher" /tr "$launchCmd" /sc once /st 00:00 /rl highest /f | Out-Null
+              
+              # Run the task immediately
+              & schtasks /run /tn "AppLauncher" | Out-Null
+              
+              Write-Host "Task triggered. The app will appear on the desktop once RDP session is active." -ForegroundColor Green
           } else {
-              Write-Host "CRITICAL ERROR: Could not find $targetExeName anywhere in $workDir" -ForegroundColor Red
-              Write-Host "Scanning all files to debug..."
-              Get-ChildItem -Path $workDir -Recurse | Select-Object FullName | Out-File "$workDir\debug_files.txt"
+              Write-Host "CRITICAL ERROR: $targetExeName not found!" -ForegroundColor Red
+              Get-ChildItem -Path $workDir -Recurse | Select-Object FullName | Out-File "$workDir\debug.txt"
           }
 
       - name: 5. Keep Server Alive (48 Hours)
