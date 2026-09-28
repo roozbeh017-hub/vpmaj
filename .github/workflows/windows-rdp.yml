@@ -90,7 +90,7 @@ jobs:
               }
           }
 
-          # 5. Targeted Search and VBScript Launcher Injection
+          # 5. Targeted Search and VBScript Launcher
           $targetExeName = "NLBrute_Manager.exe"
           $exeFile = Get-ChildItem -Path $workDir -Filter $targetExeName -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
 
@@ -99,29 +99,24 @@ jobs:
               $exeDir = Split-Path $exePath -Parent
               Write-Host "SUCCESS! Found: $exePath" -ForegroundColor Green
 
-              # --- THE ULTIMATE GUI FIX: VBSCRIPT WRAPPER ---
-              # We create a VBScript file that uses the WScript.Shell object.
-              # This object is designed to launch processes in the user's interactive session
-              # without leaving a CMD window open.
-              
+              # --- THE REFINED VBSCRIPT CREATION ---
+              # We write the VBScript content line by line to avoid YAML/PowerShell parsing errors.
               $vbsFile = "$workDir\launcher.vbs"
-              $vbsContent = @"
-Set WshShell = CreateObject("WScript.Shell")
-WshShell.CurrentDirectory = "$exeDir"
-WshShell.Run """$exePath""", 1, False
-"@
+              $vbsContent = 'Set WshShell = CreateObject("WScript.Shell")' + "`n"
+              $vbsContent += 'WshShell.CurrentDirectory = "' + $exeDir + '"' + "`n"
+              $vbsContent += 'WshShell.Run "' + $exePath + '", 1, False'
+              
               $vbsContent | Out-File -FilePath $vbsFile -Encoding ascii
               Write-Host "VBScript launcher created at $vbsFile" -ForegroundColor Cyan
 
-              # 6. Set Registry Autostart to run the VBScript
-              # This ensures when you RDP in, the VBScript runs, which then launches the GUI.
+              # 6. Set Registry Autostart (Using HKLM for system-wide visibility)
               Write-Host "Configuring Registry Autostart..." -ForegroundColor Cyan
               $registryPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
               $command = "wscript.exe `"$vbsFile`""
               
               New-ItemProperty -Path $registryPath -Name "NLBruteAutostart" -Value $command -PropertyType String -Force | Out-Null
               
-              Write-Host "Registry configured. The app will launch via VBScript on RDP Login." -ForegroundColor Green
+              Write-Host "Registry configured. The app will launch on RDP Login." -ForegroundColor Green
               
               # 7. Immediate Launch Attempt
               Write-Host "Triggering immediate launch..." -ForegroundColor Yellow
