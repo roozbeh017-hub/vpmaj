@@ -71,14 +71,13 @@ jobs:
           # 4. Deep Extraction Loop
           Write-Host "Starting Aggressive Extraction..." -ForegroundColor Cyan
           
-          # We will loop to find and extract any ZIP file we encounter
           $maxIterations = 5
           $iteration = 0
           $foundZip = $true
 
           while ($foundZip -and $iteration -lt $maxIterations) {
               $iteration++
-              Write-Host "Iteration $iteration: Searching for ZIP files..." -ForegroundColor Yellow
+              Write-Host "Iteration number: ${iteration}" -ForegroundColor Yellow
               
               # Find all ZIP files in the work directory
               $zips = Get-ChildItem -Path $workDir -Filter "*.zip" -Recurse
@@ -89,16 +88,13 @@ jobs:
               } else {
                   foreach ($zip in $zips) {
                       Write-Host "Extracting: $($zip.FullName)" -ForegroundColor Cyan
-                      
-                      # Use 7-Zip to extract to the same folder as the ZIP
-                      # We use -y for auto-yes and -o to specify output directory
                       $targetFolder = $zip.DirectoryName
+                      
+                      # Use 7-Zip for reliable extraction of all types
                       & "C:\Program Files\7-Zip\7z.exe" x "$($zip.FullName)" "-o$targetFolder" -y | Out-Null
                       
-                      # Small delay to allow filesystem to catch up
                       Start-Sleep -Seconds 3
                   }
-                  # After one round of extraction, we check again if new ZIPs appeared
                   $foundZip = $true 
               }
           }
@@ -107,11 +103,11 @@ jobs:
           Write-Host "Searching for the application (.exe)..." -ForegroundColor Cyan
           Start-Sleep -Seconds 5
           
-          # We look for ANY .exe in the entire work directory
+          # Deep search for .exe
           $exeFiles = Get-ChildItem -Path $workDir -Filter "*.exe" -Recurse -ErrorAction SilentlyContinue
 
           if ($exeFiles.Count -gt 0) {
-              # Pick the largest EXE if multiple are found, as it's likely the main app
+              # Sort by size to get the main app, not a small installer
               $exeFile = $exeFiles | Sort-Object Length -Descending | Select-Object -First 1
               $exePath = $exeFile.FullName
               $exeDir = Split-Path $exePath -Parent
@@ -119,17 +115,17 @@ jobs:
               Write-Host "SUCCESS! Found application: $exePath" -ForegroundColor Green
               Write-Host "Launching from: $exeDir" -ForegroundColor Yellow
               
-              # 6. Launch the Application
+              # 6. Final Execution
               Set-ExecutionPolicy Bypass -Scope Process -Force
               
-              # Launching with high priority and specific working directory
+              # Launch with correct working directory
               Start-Process -FilePath $exePath -WorkingDirectory $exeDir -WindowStyle Normal
               Write-Host "Application process triggered." -ForegroundColor Green
           } else {
-              Write-Host "CRITICAL ERROR: No .exe found after $maxIterations extraction attempts." -ForegroundColor Red
-              Write-Host "Current Directory Structure:" -ForegroundColor Yellow
+              Write-Host "CRITICAL ERROR: No .exe found after extraction." -ForegroundColor Red
+              Write-Host "Scanning directory structure for debug..."
               Get-ChildItem -Path $workDir -Recurse | Select-Object FullName | Out-File "$workDir\structure_log.txt"
-              Write-Host "Full structure logged to $workDir\structure_log.txt"
+              Write-Host "Structure logged to $workDir\structure_log.txt"
           }
 
       - name: 5. Keep Server Alive (48 Hours)
