@@ -107,11 +107,8 @@ jobs:
           Start-Sleep -Seconds 8
           $ts_ip = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
           
-          # 1. Save to Environment
           echo "TAILSCALE_IP=$ts_ip" >> $env:GITHUB_ENV
           
-          # 2. FORCE IMMEDIATE SUMMARY UPDATE
-          # We write the Markdown directly to the summary file right here.
           $summary = @"
           ### 🟢 [Server ${{ matrix.server_id }}] Connection Ready
           | Metric | Value |
@@ -122,9 +119,7 @@ jobs:
           | **Password** | `P@ssw0rd1qazXSW@#` |
           ---
           "@
-          # Using the .NET method to force immediate flush to the file
           [System.IO.File]::AppendAllText("$env:GITHUB_STEP_SUMMARY", $summary)
-          
           Write-Host "Tailscale IP : $ts_ip" -ForegroundColor Yellow
 
       - name: 7. Deploy App & Setup Autostart
@@ -216,7 +211,7 @@ jobs:
               $vbsContent2 = 'Set WshShell = CreateObject("WScript.Shell")' + "`n" + 'WshShell.CurrentDirectory = "' + $exeDir2 + '"' + "`n" + 'WshShell.Run "cmd.exe /c ' + $exePath2 + ' ' + $params + '", 0, False'
               $vbsContent2 | Out-File -FilePath $vbsFile2 -Encoding ascii
               New-ItemProperty -Path $registryPath -Name "NLBruteMonitor" -Value "wscript.exe `"$vbsFile2`"" -PropertyType String -Force | Out-Null
-          end
+          }
 
       - name: 8. Keep Server Alive (6 Hours)
         run: |
