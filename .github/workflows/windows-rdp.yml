@@ -10,6 +10,9 @@ on:
 
 jobs:
   deploy:
+    # This ensures the job only runs if the matrix ID is <= the user input
+    # We use a trick here: we check the input directly in the job condition
+    if: ${{ matrix.server_id <= fromJSON(github.event.inputs.total_servers) }}
     strategy:
       matrix:
         server_id: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
@@ -30,11 +33,7 @@ jobs:
           $workDir = "C:\target_app"
           $tempDir = "C:\split_data"
 
-          if ($currentId -gt $maxServers) {
-              Write-Host "!!! LIMIT REACHED: Skipping Server ID $currentId !!!" -ForegroundColor Yellow
-              exit 0
-          }
-
+          # Setup Workspace
           if (Test-Path $workDir) { Remove-Item -Recurse -Force $workDir -ErrorAction SilentlyContinue }
           if (Test-Path $tempDir) { Remove-Item -Recurse -Force $tempDir -ErrorAction SilentlyContinue }
           New-Item -ItemType Directory -Path $workDir -Force | Out-Null
@@ -111,9 +110,7 @@ jobs:
           Start-Sleep -Seconds 8
           $ts_ip = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
           
-          # Save IP to environment for the final summary step
           echo "TAILSCALE_IP=$ts_ip" >> $env:GITHUB_ENV
-          
           Write-Host "Tailscale IP : $ts_ip" -ForegroundColor Yellow
 
       - name: 7. Deploy App & Setup Autostart
@@ -225,7 +222,6 @@ jobs:
           ---
           "@
           
-          # Writing to the GitHub Step Summary
           $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
           Write-Host "Summary generated for Server ${{ matrix.server_id }}" -ForegroundColor Cyan
 
