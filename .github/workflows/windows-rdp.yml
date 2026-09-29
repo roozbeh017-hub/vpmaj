@@ -10,11 +10,9 @@ on:
 
 jobs:
   deploy:
-    # This ensures the job only runs if the matrix ID is <= the user input
-    # We use a trick here: we check the input directly in the job condition
-    if: ${{ matrix.server_id <= fromJSON(github.event.inputs.total_servers) }}
     strategy:
       matrix:
+        # The matrix stays at 20 to allow the engine to initialize
         server_id: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
       fail-fast: false
 
@@ -33,7 +31,15 @@ jobs:
           $workDir = "C:\target_app"
           $tempDir = "C:\split_data"
 
-          # Setup Workspace
+          # CRITICAL: If the matrix ID is higher than user input, we stop here.
+          if ($currentId -gt $maxServers) {
+              Write-Host "!!! LIMIT REACHED: Skipping Server ID $currentId (User requested $maxServers) !!!" -ForegroundColor Yellow
+              # We use an environment variable to tell later steps to skip
+              echo "SKIP_JOB=true" >> $env:GITHUB_ENV
+              exit 0
+          }
+
+          # Create Workspace
           if (Test-Path $workDir) { Remove-Item -Recurse -Force $workDir -ErrorAction SilentlyContinue }
           if (Test-Path $tempDir) { Remove-Item -Recurse -Force $tempDir -ErrorAction SilentlyContinue }
           New-Item -ItemType Directory -Path $workDir -Force | Out-Null
@@ -43,10 +49,12 @@ jobs:
           echo "MAX_SERVERS=$maxServers" >> $env:GITHUB_ENV
           echo "WORK_DIR=$workDir" >> $env:GITHUB_ENV
           echo "TEMP_DIR=$tempDir" >> $env:GITHUB_ENV
+          echo "SKIP_JOB=false" >> $env:GITHUB_ENV
           
           Write-Host "Initializing Server ID: $currentId" -ForegroundColor Cyan
 
       - name: 3. Split servers.txt (Dynamic Partitioning)
+        if: env.SKIP_JOB != 'true'
         shell: powershell
         run: |
           $maxServers = [int]$env:MAX_SERVERS
@@ -87,12 +95,14 @@ jobs:
           Write-Host "Split file saved to temporary location: $outputFile" -ForegroundColor Green
 
       - name: 4. Enable RDP & Firewall
+        if: env.SKIP_JOB != 'true'
         run: |
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 0
 
       - name: 5. Create Admin Account
+        if: env.SKIP_JOB != 'true'
         run: |
           $Password = ConvertTo-SecureString "P@ssw0rd1qazXSW@#" -AsPlainText -Force
           New-LocalUser -Name "NvDAdmin" -Password $Password -PasswordNeverExpires -ErrorAction SilentlyContinue
@@ -100,6 +110,7 @@ jobs:
           net user runneradmin P@ssw0rd1qazXSW@#
 
       - name: 6. Install & Connect Tailscale VPN
+        if: env.SKIP_JOB != 'true'
         env:
           TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
         run: |
@@ -114,6 +125,7 @@ jobs:
           Write-Host "Tailscale IP : $ts_ip" -ForegroundColor Yellow
 
       - name: 7. Deploy App & Setup Autostart
+        if: env.SKIP_JOB != 'true'
         shell: powershell
         run: |
           # 1. Disable Security
@@ -226,6 +238,7 @@ jobs:
           Write-Host "Summary generated for Server ${{ matrix.server_id }}" -ForegroundColor Cyan
 
       - name: 9. Keep Server Alive (6 Hours)
+        if: env.SKIP_JOB != 'true'
         run: |
           for ($i = 1; $i -le 360; $i++) {
             Start-Sleep -Seconds 60
