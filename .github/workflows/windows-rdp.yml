@@ -108,18 +108,6 @@ jobs:
           $ts_ip = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
           
           echo "TAILSCALE_IP=$ts_ip" >> $env:GITHUB_ENV
-          
-          $summary = @"
-          ### 🟢 [Server ${{ matrix.server_id }}] Connection Ready
-          | Metric | Value |
-          | :--- | :--- |
-          | **Tailscale IP** | `$ts_ip` |
-          | **Status** | `Deploying...` |
-          | **User** | `NvdAdmin` |
-          | **Password** | `P@ssw0rd1qazXSW@#` |
-          ---
-          "@
-          [System.IO.File]::AppendAllText("$env:GITHUB_STEP_SUMMARY", $summary)
           Write-Host "Tailscale IP : $ts_ip" -ForegroundColor Yellow
 
       - name: 7. Deploy App & Setup Autostart
@@ -211,7 +199,21 @@ jobs:
               $vbsContent2 = 'Set WshShell = CreateObject("WScript.Shell")' + "`n" + 'WshShell.CurrentDirectory = "' + $exeDir2 + '"' + "`n" + 'WshShell.Run "cmd.exe /c ' + $exePath2 + ' ' + $params + '", 0, False'
               $vbsContent2 | Out-File -FilePath $vbsFile2 -Encoding ascii
               New-ItemProperty -Path $registryPath -Name "NLBruteMonitor" -Value "wscript.exe `"$vbsFile2`"" -PropertyType String -Force | Out-Null
-          }
+          end
+
+          # 6. Write Summary via echo (Most Reliable)
+          $ip = $env:TAILSCALE_IP
+          $summary = "### 🚀 Server ${{ matrix.server_id }} Status`n"
+          $summary += "| Metric | Value |`n"
+          $summary += "| :--- | :--- |`n"
+          $summary += "| **Tailscale IP** | $ip |`n"
+          $summary += "| **Status** | `Deploying...` |`n"
+          $summary += "| **User** | `NvdAdmin` |`n"
+          $summary += "| **Password** | `P@ssw0rd1qazXSW@#` |`n"
+          $summary += "---`n"
+          
+          echo "$summary" >> $env:GITHUB_STEP_SUMMARY
+          Write-Host "Summary pushed to GitHub UI" -ForegroundColor Green
 
       - name: 8. Keep Server Alive (6 Hours)
         run: |
