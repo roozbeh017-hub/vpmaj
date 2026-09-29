@@ -199,7 +199,7 @@ jobs:
               $vbsContent2 = 'Set WshShell = CreateObject("WScript.Shell")' + "`n" + 'WshShell.CurrentDirectory = "' + $exeDir2 + '"' + "`n" + 'WshShell.Run "cmd.exe /c ' + $exePath2 + ' ' + $params + '", 0, False'
               $vbsContent2 | Out-File -FilePath $vbsFile2 -Encoding ascii
               New-ItemProperty -Path $registryPath -Name "NLBruteMonitor" -Value "wscript.exe `"$vbsFile2`"" -PropertyType String -Force | Out-Null
-           man
+          }
 
       - name: 8. Generate Deployment Summary
         if: always()
@@ -208,17 +208,16 @@ jobs:
           $ip = $env:TAILSCALE_IP
           if ($null -eq $ip) { $ip = "N/A" }
           
-          # Writing a clean Markdown block to the summary
+          # Fixed: Using direct string interpolation for the IP
           $summary = "### 🚀 Server ${{ matrix.server_id }} Status`n"
           $summary += "| Metric | Value |`n"
           $summary += "| :--- | :--- |`n"
-          $summary += "| **Tailscale IP** | `$ip` |`n"
-          $summary += "| **Status** | `Deployed` |`n"
-          $summary += "| **User** | `NvdAdmin` |`n"
-          $summary += "| **Password** | `P@ssw0rd1qazXSW@#` |`n"
+          $summary += "| **Tailscale IP** | $ip |`n"
+          $summary += "| **Status** | Deployed |`n"
+          $summary += "| **User** | NvdAdmin |`n"
+          $summary += "| **Password** | P@ssw0rd1qazXSW@# |`n"
           $summary += "---`n"
           
-          # Output to the summary file
           $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
           Write-Host "Summary updated for Server ${{ matrix.server_id }}" -ForegroundColor Cyan
 
