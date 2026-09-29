@@ -12,7 +12,7 @@ jobs:
   deploy:
     strategy:
       matrix:
-        # This defines the maximum capacity. The input 'total_servers' limits the active runs.
+        # Maximum capacity of the workflow
         server_id: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
       fail-fast: false
 
@@ -30,31 +30,30 @@ jobs:
           $currentId = ${{ matrix.server_id }}
           $workDir = "C:\target_app"
 
-          # Stop job if the matrix ID is higher than the user's requested amount
+          # Logic to stop the job if the matrix index is higher than user input
           if ($currentId -gt $maxServers) {
-              Write-Host "Stopping Job: Server ID $currentId exceeds requested limit of $maxServers" -ForegroundColor Yellow
+              Write-Host "!!! LIMIT REACHED: Skipping Server ID $currentId (User requested $maxServers) !!!" -ForegroundColor Yellow
               exit 0
           }
 
-          # Prepare Workspace
+          # Create Workspace
           if (Test-Path $workDir) { Remove-Item -Recurse -Force $workDir -ErrorAction SilentlyContinue }
           New-Item -ItemType Directory -Path $workDir -Force | Out-Null
           
-          # Set Environment Variables for later steps
+          # Set Environment Variables for subsequent steps
           echo "SERVER_ID=$currentId" >> $env:GITHUB_ENV
           echo "MAX_SERVERS=$maxServers" >> $env:GITHUB_ENV
           echo "WORK_DIR=$workDir" >> $env:GITHUB_ENV
           
           Write-Host "Initializing Server ID: $currentId" -ForegroundColor Cyan
 
-      - name: 3. Split servers.txt (Data Partitioning)
+      - name: 3. Split servers.txt (Dynamic Partitioning)
         shell: powershell
         run: |
           $maxServers = [int]$env:MAX_SERVERS
           $currentId = [int]$env:SERVER_ID
           $inputFile = "${{ github.workspace }}\servers.txt" 
           $outputFile = "$($env:WORK_DIR)\servers.txt"
-          $linesPerServer = 100 
 
           Write-Host "Reading master file from: $inputFile" -ForegroundColor Cyan
           
@@ -63,19 +62,51 @@ jobs:
               exit 1
           }
 
-          # Read all lines and filter out empty lines to ensure clean data
+          # 1. Read all lines and filter out empty ones to ensure clean math
           $allLines = Get-Content $inputFile | Where-Object { $_.Trim() -ne "" }
+          $totalLines = $allLines.Count
           
-          # Calculate the chunk for THIS server
-          $startIndex = ($currentId - 1) * $linesPerServer
-          $serverLines = $allLines | Select-Object -Skip $startIndex -First $linesPerServer
+          Write-Host "Total lines in master file: $totalLines" -ForegroundColor Cyan
+          Write-Host "Total servers requested: $maxServers" -ForegroundColor Cyan
 
-          if ($null -eq $serverLines -or $serverLines.Count -eq 0) {
-              Write-Error "No lines found for Server ID $currentId. Check your input file line count."
+          if ($totalLines -eq 0) {
+              Write-Error "Master file is empty!"
               exit 1
           }
 
-          # Save the specific chunk to the app directory
+          # 2. Calculate dynamic lines per server
+          # We divide the total lines by the number of servers requested
+          $linesPerServer = [Math]::Floor($totalLines / $maxServers)
+
+          if ($linesPerServer -lt 1) {
+              Write-Error "Error: Not enough lines in servers.txt to split among $maxServers servers."
+              exit 1
+          }
+
+          Write-Host "Calculated lines per server: $linesPerServer" -ForegroundColor Yellow
+
+          # 3. Calculate the specific range for THIS server
+          # Server 1 starts at 0, Server 2 starts at $linesPerServer, etc.
+          $startIndex = ($currentId - 1) * $linesPerServer
+          
+          # Handle the last server to ensure it takes all remaining lines (avoiding rounding loss)
+          $countToTake = $linesPerServer
+          if ($currentId -eq $maxServers) {
+              $countToTake = $totalLines - $startIndex
+              Write-Host "Last server detected. Taking all remaining lines to prevent data loss." -ForegroundColor Green
+          }
+
+          Write-Host "Server $currentId: Starting at index $startIndex, target count: $countToTake" -ForegroundColor Cyan
+
+          # 4. Extract the specific chunk
+          $serverLines = $allLines | Select-Object -Skip $startIndex -First $countToTake
+
+          if ($null -eq $serverLines -or $serverLines.Count -eq 0) {
+              Write-Error "No data found for Server $currentId. Check input file."
+              exit 1
+          }
+
+          # 5. Save the chunk to the target application directory
           $serverLines | Out-File -FilePath $outputFile -Encoding ascii -Force
           Write-Host "Successfully extracted $($serverLines.Count) lines for Server $currentId to $outputFile" -ForegroundColor Green
 
