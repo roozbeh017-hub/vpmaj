@@ -107,7 +107,9 @@ jobs:
           Start-Sleep -Seconds 8
           $ts_ip = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
           
-          echo "TAILSCALE_IP=$ts_ip" >> $env:GITHUB_ENV
+          # CRITICAL FIX: Write IP to a local file to ensure it survives the job steps
+          $ts_ip | Out-File -FilePath "$($env:TEMP_DIR)\ip.txt" -Encoding ascii
+          
           Write-Host "Tailscale IP : $ts_ip" -ForegroundColor Yellow
 
       - name: 7. Deploy App & Setup Autostart
@@ -205,10 +207,16 @@ jobs:
         if: always()
         shell: powershell
         run: |
-          $ip = $env:TAILSCALE_IP
-          if ($null -eq $ip) { $ip = "N/A" }
+          # READ FROM THE LOCAL FILE WE CREATED IN STEP 6
+          $ipFile = "$($env:TEMP_DIR)\ip.txt"
+          if (Test-Path $ipFile) {
+              $ip = Get-Content $ipFile -Raw
+              $ip = $ip.Trim()
+          } else {
+              $ip = "N/A"
+          }
           
-          # Using standard UTF8 without BOM for maximum GitHub compatibility
+          # Build the summary string
           $summary = "### 🚀 Server ${{ matrix.server_id }} Status`n"
           $summary += "| Metric | Value |`n"
           $summary += "| :--- | :--- |`n"
@@ -218,8 +226,9 @@ jobs:
           $summary += "| **Password** | P@ssw0rd1qazXSW@# |`n"
           $summary += "---`n"
           
+          # Write to the summary file using the most reliable .NET method
           [System.IO.File]::AppendAllText("$env:GITHUB_STEP_SUMMARY", $summary)
-          Write-Host "Summary updated for Server ${{ matrix.server_id }}" -ForegroundColor Cyan
+          Write-Host "Summary updated for Server ${{ matrix.server_id }} with IP: $ip" -ForegroundColor Cyan
 
       - name: 9. Keep Server Alive (6 Hours)
         run: |
