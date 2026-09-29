@@ -9,7 +9,7 @@ on:
         default: '10'
 
 jobs:
-  # JOB 1: This job calculates the range so we don't waste runners
+  # JOB 1: Calculates the range and outputs a JSON array
   setup:
     runs-on: ubuntu-latest
     outputs:
@@ -17,18 +17,25 @@ jobs:
     steps:
       - name: Generate Server ID Array
         id: set-ids
+        shell: powershell
         run: |
-          # Get the input and convert to a JSON array [1, 2, 3...]
-          TOTAL=${{ github.event.inputs.total_servers }}
-          IDS=$(python3 -c "print([i for i in range(1, $int(TOTAL) + 1)])" | jq -c '.')
-          echo "server_ids=$IDS" >> $GITHUB_OUTPUT
-          echo "Generated IDs: $IDS"
+          $total = [int]${{ github.event.inputs.total_servers }}
+          $ids = @()
+          for ($i = 1; $i -le $total; $i++) { $ids += $i }
+          
+          # Convert array to JSON string
+          $jsonIds = $ids | ConvertTo-Json -Compress
+          
+          # Write to GITHUB_OUTPUT
+          echo "server_ids=$jsonIds" >> $env:GITHUB_OUTPUT
+          Write-Host "Generated IDs: $jsonIds"
 
-  # JOB 2: This job actually does the work
+  # JOB 2: Performs the actual deployment
   deploy:
     needs: setup
     strategy:
       matrix:
+        # This will now receive [1, 2, 3...] from the setup job
         server_id: ${{ fromJSON(needs.setup.outputs.server_ids) }}
       fail-fast: false
 
@@ -39,7 +46,7 @@ jobs:
       - name: 1. Checkout Repo
         uses: actions/checkout@v4
 
-      - name: 2. Setup Workspace
+      - name: 2. Setup Workspace & Validate Input
         shell: powershell
         run: |
           $maxServers = [int]${{ github.event.inputs.total_servers }}
@@ -47,6 +54,7 @@ jobs:
           $workDir = "C:\target_app"
           $tempDir = "C:\split_data"
 
+          # Create clean workspace and dedicated temp folder
           if (Test-Path $workDir) { Remove-Item -Recurse -Force $workDir -ErrorAction SilentlyContinue }
           if (Test-Path $tempDir) { Remove-Item -Recurse -Force $tempDir -ErrorAction SilentlyContinue }
           New-Item -ItemType Directory -Path $workDir -Force | Out-Null
@@ -67,7 +75,12 @@ jobs:
           $inputFile = "${{ github.workspace }}\servers.txt" 
           $outputFile = "$($env:TEMP_DIR)\servers.txt"
 
-          if (!(Test-Path $inputFile)) { exit 1 }
+          Write-Host "Reading master file from: $inputFile" -ForegroundColor Cyan
+          
+          if (!(Test-Path $inputFile)) {
+              Write-Error "CRITICAL: servers.txt not found in repository root!"
+              exit 1
+          }
 
           $allLines = Get-Content $inputFile | Where-Object { $_.Trim() -ne "" }
           $totalLines = $allLines.Count
@@ -82,9 +95,14 @@ jobs:
               $countToTake = $totalLines - $startIndex
           }
 
+          Write-Host "Server ${currentId}: Extracting ${countToTake} lines..." -ForegroundColor Cyan
+
           $serverLines = $allLines | Select-Object -Skip $startIndex -First $countToTake
 
-          if ($null -eq $serverLines -or $serverLines.Count -eq 0) { exit 1 }
+          if ($null -eq $serverLines -or $serverLines.Count -eq 0) {
+              Write-Error "No data found for Server ${currentId}."
+              exit 1
+          }
 
           $serverLines | Out-File -FilePath $outputFile -Encoding ascii -Force
           Write-Host "Split file saved to: $outputFile" -ForegroundColor Green
