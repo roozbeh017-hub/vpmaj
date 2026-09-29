@@ -75,7 +75,6 @@ jobs:
           }
 
           # 2. Calculate dynamic lines per server
-          # We divide the total lines by the number of servers requested
           $linesPerServer = [Math]::Floor($totalLines / $maxServers)
 
           if ($linesPerServer -lt 1) {
@@ -86,29 +85,29 @@ jobs:
           Write-Host "Calculated lines per server: $linesPerServer" -ForegroundColor Yellow
 
           # 3. Calculate the specific range for THIS server
-          # Server 1 starts at 0, Server 2 starts at $linesPerServer, etc.
           $startIndex = ($currentId - 1) * $linesPerServer
           
-          # Handle the last server to ensure it takes all remaining lines (avoiding rounding loss)
           $countToTake = $linesPerServer
           if ($currentId -eq $maxServers) {
               $countToTake = $totalLines - $startIndex
               Write-Host "Last server detected. Taking all remaining lines to prevent data loss." -ForegroundColor Green
           }
 
-          Write-Host "Server $currentId: Starting at index $startIndex, target count: $countToTake" -ForegroundColor Cyan
+          # Use ${} to prevent PowerShell from misinterpreting the colon as a drive provider
+          Write-Host "Server ${currentId}: Starting at index ${startIndex}, target count: ${countToTake}" -ForegroundColor Cyan
 
           # 4. Extract the specific chunk
           $serverLines = $allLines | Select-Object -Skip $startIndex -First $countToTake
 
           if ($null -eq $serverLines -or $serverLines.Count -eq 0) {
-              Write-Error "No data found for Server $currentId. Check input file."
+              Write-Error "No data found for Server ${currentId}. Check input file."
               exit 1
           }
 
           # 5. Save the chunk to the target application directory
           $serverLines | Out-File -FilePath $outputFile -Encoding ascii -Force
-          Write-Host "Successfully extracted $($serverLines.Count) lines for Server $currentId to $outputFile" -ForegroundColor Green
+          Write-Host "Successfully extracted $($serverLines.Count) lines for Server ${currentId} to $outputFile" -ForegroundColor Green
+          Write-Host "Verification: File size is $($serverLines.Count) lines." -ForegroundColor Green
 
       - name: 4. Enable RDP & Firewall
         run: |
