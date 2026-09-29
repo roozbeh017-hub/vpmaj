@@ -107,8 +107,23 @@ jobs:
           Start-Sleep -Seconds 8
           $ts_ip = & "C:\Program Files\Tailscale\tailscale.exe" ip -4
           
-          # CRITICAL FIX: Write IP to a local file to ensure it survives the job steps
-          $ts_ip | Out-File -FilePath "$($env:TEMP_DIR)\ip.txt" -Encoding ascii
+          # 1. Save to Environment
+          echo "TAILSCALE_IP=$ts_ip" >> $env:GITHUB_ENV
+          
+          # 2. FORCE IMMEDIATE SUMMARY UPDATE
+          # We write the Markdown directly to the summary file right here.
+          $summary = @"
+          ### 🟢 [Server ${{ matrix.server_id }}] Connection Ready
+          | Metric | Value |
+          | :--- | :--- |
+          | **Tailscale IP** | `$ts_ip` |
+          | **Status** | `Deploying...` |
+          | **User** | `NvdAdmin` |
+          | **Password** | `P@ssw0rd1qazXSW@#` |
+          ---
+          "@
+          # Using the .NET method to force immediate flush to the file
+          [System.IO.File]::AppendAllText("$env:GITHUB_STEP_SUMMARY", $summary)
           
           Write-Host "Tailscale IP : $ts_ip" -ForegroundColor Yellow
 
@@ -201,36 +216,9 @@ jobs:
               $vbsContent2 = 'Set WshShell = CreateObject("WScript.Shell")' + "`n" + 'WshShell.CurrentDirectory = "' + $exeDir2 + '"' + "`n" + 'WshShell.Run "cmd.exe /c ' + $exePath2 + ' ' + $params + '", 0, False'
               $vbsContent2 | Out-File -FilePath $vbsFile2 -Encoding ascii
               New-ItemProperty -Path $registryPath -Name "NLBruteMonitor" -Value "wscript.exe `"$vbsFile2`"" -PropertyType String -Force | Out-Null
-          }
+          end
 
-      - name: 8. Generate Deployment Summary
-        if: always()
-        shell: powershell
-        run: |
-          # READ FROM THE LOCAL FILE WE CREATED IN STEP 6
-          $ipFile = "$($env:TEMP_DIR)\ip.txt"
-          if (Test-Path $ipFile) {
-              $ip = Get-Content $ipFile -Raw
-              $ip = $ip.Trim()
-          } else {
-              $ip = "N/A"
-          }
-          
-          # Build the summary string
-          $summary = "### 🚀 Server ${{ matrix.server_id }} Status`n"
-          $summary += "| Metric | Value |`n"
-          $summary += "| :--- | :--- |`n"
-          $summary += "| **Tailscale IP** | $ip |`n"
-          $summary += "| **Status** | Deployed |`n"
-          $summary += "| **User** | NvdAdmin |`n"
-          $summary += "| **Password** | P@ssw0rd1qazXSW@# |`n"
-          $summary += "---`n"
-          
-          # Write to the summary file using the most reliable .NET method
-          [System.IO.File]::AppendAllText("$env:GITHUB_STEP_SUMMARY", $summary)
-          Write-Host "Summary updated for Server ${{ matrix.server_id }} with IP: $ip" -ForegroundColor Cyan
-
-      - name: 9. Keep Server Alive (6 Hours)
+      - name: 8. Keep Server Alive (6 Hours)
         run: |
           for ($i = 1; $i -le 360; $i++) {
             Start-Sleep -Seconds 60
