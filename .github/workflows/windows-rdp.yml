@@ -1,4 +1,4 @@
-name: Mass Server Deployment (Single File Mode)
+name: Mass Server Deployment (Dynamic Matrix)
 
 on:
   workflow_dispatch:
@@ -9,11 +9,27 @@ on:
         default: '10'
 
 jobs:
+  # JOB 1: This job calculates the range so we don't waste runners
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      server_ids: ${{ steps.set-ids.outputs.server_ids }}
+    steps:
+      - name: Generate Server ID Array
+        id: set-ids
+        run: |
+          # Get the input and convert to a JSON array [1, 2, 3...]
+          TOTAL=${{ github.event.inputs.total_servers }}
+          IDS=$(python3 -c "print([i for i in range(1, $int(TOTAL) + 1)])" | jq -c '.')
+          echo "server_ids=$IDS" >> $GITHUB_OUTPUT
+          echo "Generated IDs: $IDS"
+
+  # JOB 2: This job actually does the work
   deploy:
+    needs: setup
     strategy:
       matrix:
-        # The matrix stays at 20 to allow the engine to initialize
-        server_id: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+        server_id: ${{ fromJSON(needs.setup.outputs.server_ids) }}
       fail-fast: false
 
     runs-on: windows-latest
@@ -23,7 +39,7 @@ jobs:
       - name: 1. Checkout Repo
         uses: actions/checkout@v4
 
-      - name: 2. Setup Workspace & Validate Input
+      - name: 2. Setup Workspace
         shell: powershell
         run: |
           $maxServers = [int]${{ github.event.inputs.total_servers }}
@@ -31,15 +47,6 @@ jobs:
           $workDir = "C:\target_app"
           $tempDir = "C:\split_data"
 
-          # CRITICAL: If the matrix ID is higher than user input, we stop here.
-          if ($currentId -gt $maxServers) {
-              Write-Host "!!! LIMIT REACHED: Skipping Server ID $currentId (User requested $maxServers) !!!" -ForegroundColor Yellow
-              # We use an environment variable to tell later steps to skip
-              echo "SKIP_JOB=true" >> $env:GITHUB_ENV
-              exit 0
-          }
-
-          # Create Workspace
           if (Test-Path $workDir) { Remove-Item -Recurse -Force $workDir -ErrorAction SilentlyContinue }
           if (Test-Path $tempDir) { Remove-Item -Recurse -Force $tempDir -ErrorAction SilentlyContinue }
           New-Item -ItemType Directory -Path $workDir -Force | Out-Null
@@ -49,12 +56,10 @@ jobs:
           echo "MAX_SERVERS=$maxServers" >> $env:GITHUB_ENV
           echo "WORK_DIR=$workDir" >> $env:GITHUB_ENV
           echo "TEMP_DIR=$tempDir" >> $env:GITHUB_ENV
-          echo "SKIP_JOB=false" >> $env:GITHUB_ENV
           
           Write-Host "Initializing Server ID: $currentId" -ForegroundColor Cyan
 
       - name: 3. Split servers.txt (Dynamic Partitioning)
-        if: env.SKIP_JOB != 'true'
         shell: powershell
         run: |
           $maxServers = [int]$env:MAX_SERVERS
@@ -62,12 +67,7 @@ jobs:
           $inputFile = "${{ github.workspace }}\servers.txt" 
           $outputFile = "$($env:TEMP_DIR)\servers.txt"
 
-          Write-Host "Reading master file from: $inputFile" -ForegroundColor Cyan
-          
-          if (!(Test-Path $inputFile)) {
-              Write-Error "CRITICAL: servers.txt not found in repository root!"
-              exit 1
-          }
+          if (!(Test-Path $inputFile)) { exit 1 }
 
           $allLines = Get-Content $inputFile | Where-Object { $_.Trim() -ne "" }
           $totalLines = $allLines.Count
@@ -82,27 +82,20 @@ jobs:
               $countToTake = $totalLines - $startIndex
           }
 
-          Write-Host "Server ${currentId}: Extracting ${countToTake} lines..." -ForegroundColor Cyan
-
           $serverLines = $allLines | Select-Object -Skip $startIndex -First $countToTake
 
-          if ($null -eq $serverLines -or $serverLines.Count -eq 0) {
-              Write-Error "No data found for Server ${currentId}."
-              exit 1
-          }
+          if ($null -eq $serverLines -or $serverLines.Count -eq 0) { exit 1 }
 
           $serverLines | Out-File -FilePath $outputFile -Encoding ascii -Force
-          Write-Host "Split file saved to temporary location: $outputFile" -ForegroundColor Green
+          Write-Host "Split file saved to: $outputFile" -ForegroundColor Green
 
       - name: 4. Enable RDP & Firewall
-        if: env.SKIP_JOB != 'true'
         run: |
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 0
 
       - name: 5. Create Admin Account
-        if: env.SKIP_JOB != 'true'
         run: |
           $Password = ConvertTo-SecureString "P@ssw0rd1qazXSW@#" -AsPlainText -Force
           New-LocalUser -Name "NvDAdmin" -Password $Password -PasswordNeverExpires -ErrorAction SilentlyContinue
@@ -110,7 +103,6 @@ jobs:
           net user runneradmin P@ssw0rd1qazXSW@#
 
       - name: 6. Install & Connect Tailscale VPN
-        if: env.SKIP_JOB != 'true'
         env:
           TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
         run: |
@@ -125,7 +117,6 @@ jobs:
           Write-Host "Tailscale IP : $ts_ip" -ForegroundColor Yellow
 
       - name: 7. Deploy App & Setup Autostart
-        if: env.SKIP_JOB != 'true'
         shell: powershell
         run: |
           # 1. Disable Security
@@ -238,7 +229,6 @@ jobs:
           Write-Host "Summary generated for Server ${{ matrix.server_id }}" -ForegroundColor Cyan
 
       - name: 9. Keep Server Alive (6 Hours)
-        if: env.SKIP_JOB != 'true'
         run: |
           for ($i = 1; $i -le 360; $i++) {
             Start-Sleep -Seconds 60
