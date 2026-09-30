@@ -122,8 +122,8 @@ jobs:
 
       - name: 6.5. Save Tailscale IP to vpmaj Repo
         env:
-          # Use the exact lowercase name you provided: mytoken
-          API_TOKEN: ${{ secrets.mytoken }}
+          # Use the new secret name
+          API_TOKEN: ${{ secrets.MYLITTLE_SECRET }}
           TS_IP: ${{ env.TS_IP }}
           MATRIX_ID: ${{ matrix.server_id }}
         shell: bash
@@ -140,7 +140,7 @@ jobs:
           # DEBUG: Verify Token Loading
           echo "--- Token Debugging ---"
           if [ -z "$TOKEN" ]; then
-            echo "ERROR: API_TOKEN is empty. Did you set the secret 'mytoken' correctly?"
+            echo "ERROR: API_TOKEN is empty. Did you set the secret 'MYLITTLE_SECRET' correctly?"
             exit 1
           fi
           echo "Token Length: ${#TOKEN}"
@@ -225,7 +225,7 @@ jobs:
             --data-binary "$PAYLOAD" \
             "https://api.github.com/repos/$REPO/contents/$FILE_PATH")
 
-          COMMIT_CODE=$(echo "$COMMIT_RESPONSE" | tail -n1)
+                    COMMIT_CODE=$(echo "$COMMIT_RESPONSE" | tail -n1)
           COMMIT_BODY=$(echo "$COMMIT_RESPONSE" | sed '$d')
 
           if [ "$COMMIT_CODE" -ge 200 ] && [ "$COMMIT_CODE" -lt 300 ]; then
@@ -270,7 +270,7 @@ jobs:
           while ($foundZip -and $iteration -lt $maxIterations) {
               $iteration++
               $zips = Get-ChildItem -Path $env:WORK_DIR -Filter "*.zip" -Recurse
-                            if ($zips.Count -eq 0) { $foundZip = $false } 
+              if ($zips.Count -eq 0) { $foundZip = $false } 
               else {
                   foreach ($zip in $zips) {
                       $targetFolder = $zip.DirectoryName
