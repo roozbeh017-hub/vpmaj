@@ -120,120 +120,41 @@ jobs:
           echo "TS_IP=$ts_ip" >> $env:GITHUB_ENV
           Write-Host "Tailscale IP : $ts_ip" -ForegroundColor Yellow
 
-      - name: 6.5. Save Tailscale IP to vpmaj Repo
+      - name: 6.5. Send Tailscale IP to Telegram
         env:
-          # Use the new secret name
-          API_TOKEN: ${{ secrets.MYLITTLE_SECRET }}
           TS_IP: ${{ env.TS_IP }}
           MATRIX_ID: ${{ matrix.server_id }}
         shell: bash
         run: |
           set -e
 
-          REPO="roozbeh017-hub/vpmaj"
-          BRANCH="main"
-          FILE_PATH="fullips.txt"
+          # Your Telegram Credentials
+          CHAT_ID="7565155789"
+          BOT_TOKEN="8054074057:AAF0DCvurOYgAR4dcQ8MQjTFMDBgeLGo2j4"
           IP="$TS_IP"
-          TOKEN="***"
-          MSG="Add Tailscale IP for server-$MATRIX_ID: $IP"
-
-          # DEBUG: Verify Token Loading
-          echo "--- Token Debugging ---"
-          if [ -z "$TOKEN" ]; then
-            echo "ERROR: API_TOKEN is empty. Did you set the secret 'MYLITTLE_SECRET' correctly?"
-            exit 1
-          fi
-          echo "Token Length: ${#TOKEN}"
-          echo "Token Prefix: ${TOKEN:0:7}..."
-          echo "---------------------"
+          MSG="🖥️ <b>Server $MATRIX_ID Online</b>\nIP: <code>$IP</code>\nTime: $(date)"
 
           if [ -z "$IP" ]; then
             echo "ERROR: TS_IP is empty. Cannot proceed."
             exit 1
           fi
 
-          # 1. Try to fetch existing file
-          echo "Fetching existing file..."
+          echo "Sending to Telegram..."
           RESPONSE=$(curl -sS -w "\n%{http_code}" \
-            -H "Authorization: Bearer $TOKEN" \
-            -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/$REPO/contents/$FILE_PATH?ref=$BRANCH")
+            -X POST \
+            "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "{\"chat_id\": \"$CHAT_ID\", \"text\": \"$MSG\", \"parse_mode\": \"Markdown\"}")
 
-          # Extract status code (last line)
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-          # Extract body (everything else)
           BODY=$(echo "$RESPONSE" | sed '$d')
 
-          echo "API Response Code: $HTTP_CODE"
-
           if [ "$HTTP_CODE" -eq 200 ]; then
-            echo "Found existing file. Extracting SHA and Content..."
-            # Use python for robust JSON parsing (pre-installed on GH runners)
-            SHA=$(echo "$BODY" | python -c "import sys, json; print(json.load(sys.stdin)['sha'])")
-            CONTENT_B64=$(echo "$BODY" | python -c "import sys, json; print(json.load(sys.stdin)['content'])")
-            
-            # Decode existing content
-            EXISTING_CONTENT=$(echo -n "$CONTENT_B64" | base64 -d)
-            NEW_CONTENT="${EXISTING_CONTENT}"$'\n'"${IP}"
+            echo "Successfully sent IP to Telegram."
+            echo "Response: $BODY"
           else
-            if [ "$HTTP_CODE" -eq 404 ]; then
-              echo "File does not exist (404). Creating new file."
-              NEW_CONTENT="$IP"
-              SHA=""
-            else
-              echo "ERROR: Unexpected HTTP response $HTTP_CODE"
-              echo "$BODY"
-              exit 1
-            fi
-          fi
-
-          # 2. Prepare Payload
-          # Base64 encode the new content
-          NEW_CONTENT_B64=$(echo -n "$NEW_CONTENT" | base64 -w0)
-          
-          # Create JSON payload
-          if [ -n "$SHA" ]; then
-            PAYLOAD=$(cat <<EOF
-          {
-            "message": "$MSG",
-            "content": "$NEW_CONTENT_B64",
-            "branch": "$BRANCH",
-            "sha": "$SHA"
-          }
-          EOF
-          )
-          else
-            PAYLOAD=$(cat <<EOF
-          {
-            "message": "$MSG",
-            "content": "$NEW_CONTENT_B64",
-            "branch": "$BRANCH"
-          }
-          EOF
-          )
-          fi
-
-          echo "Sending payload to GitHub API..."
-          echo "$PAYLOAD"
-
-          # 3. Commit
-          COMMIT_RESPONSE=$(curl -sS -w "\n%{http_code}" \
-            -X PUT \
-            -H "Authorization: Bearer $TOKEN" \
-            -H "Accept: application/vnd.github.v3+json" \
-            -H "Content-Type: application/json" \
-            --data-binary "$PAYLOAD" \
-            "https://api.github.com/repos/$REPO/contents/$FILE_PATH")
-
-                    COMMIT_CODE=$(echo "$COMMIT_RESPONSE" | tail -n1)
-          COMMIT_BODY=$(echo "$COMMIT_RESPONSE" | sed '$d')
-
-          if [ "$COMMIT_CODE" -ge 200 ] && [ "$COMMIT_CODE" -lt 300 ]; then
-            echo "Successfully committed IP $IP to $REPO/$FILE_PATH"
-            echo "Response: $COMMIT_BODY"
-          else
-            echo "ERROR: Commit failed with status $COMMIT_CODE"
-            echo "Response Body: $COMMIT_BODY"
+            echo "ERROR: Telegram send failed with status $HTTP_CODE"
+            echo "Response Body: $BODY"
             exit 1
           fi
 
