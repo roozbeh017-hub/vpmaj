@@ -121,6 +121,8 @@ jobs:
           Write-Host "Tailscale IP : $ts_ip" -ForegroundColor Yellow
 
       - name: 6.5. Save Tailscale IP to vpmaj Repo
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         shell: powershell
         run: |
           $ip = $env:TS_IP
@@ -128,12 +130,17 @@ jobs:
           $branch = "main"
           $filePath = "fullips.txt"
           $message = "Add Tailscale IP for server-${{ matrix.server_id }}: $ip"
-          $token = $env:GITHUB_TOKEN
+          
+          # Verify token is present
+          if (-not $env:GITHUB_TOKEN) {
+              Write-Error "GITHUB_TOKEN is not set. Cannot proceed."
+              exit 1
+          }
 
-          # 1. Try to get existing content of fullips.txt
           $headers = @{
-              "Authorization" = "token $token"
+              "Authorization" = "Bearer $($env:GITHUB_TOKEN)"
               "Accept" = "application/vnd.github.v3+json"
+              "User-Agent" = "GitHub Actions Workflow"
           }
           
           $uriContent = "https://api.github.com/repos/$repo/contents/$filePath?ref=$branch"
@@ -141,7 +148,7 @@ jobs:
           $sha = $null
 
           try {
-              Write-Host "Checking for existing file..."
+              Write-Host "Checking for existing file at $uriContent"
               $response = Invoke-RestMethod -Uri $uriContent -Headers $headers -Method Get
               # If file exists, decode base64 content
               $existingContent = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($response.content))
@@ -149,7 +156,12 @@ jobs:
               Write-Host "Found existing fullips.txt. Appending..."
           }
           catch {
-              Write-Host "No existing fullips.txt found. Creating new file..."
+              # 404 is expected if the file doesn't exist yet
+              if ($_.Exception.Response.StatusCode.Value__ -eq 404) {
+                  Write-Host "No existing fullips.txt found (404). Creating new file..."
+              } else {
+                  Write-Warning "Unexpected error during GET request: $_"
+              }
           }
 
           # 2. Append new IP (ensure newline if content exists)
@@ -169,19 +181,30 @@ jobs:
               $payload["sha"] = $sha
           }
 
+          # Convert to JSON string
+          $jsonBody = $payload | ConvertTo-Json -Depth 10
+
+          Write-Host "Preparing payload..."
+          Write-Host "Payload Size: $($jsonBody.Length) bytes"
+
           # 4. Commit the file
           $commitUri = "https://api.github.com/repos/$repo/contents/$filePath"
           try {
-              $commitResponse = Invoke-RestMethod -Uri $commitUri -Headers $headers -Method Put -Body ($payload | ConvertTo-Json -Depth 10)
+              $commitResponse = Invoke-RestMethod -Uri $commitUri -Headers $headers -Method Put -Body $jsonBody -ContentType "application/json"
               
               if ($commitResponse) {
                   Write-Host "Successfully committed IP $ip to $repo/$filePath" -ForegroundColor Green
+                  Write-Host "Commit SHA: $($commitResponse.commit.sha)"
               } else {
-                  Write-Error "Failed to commit IP to GitHub"
+                  Write-Error "Failed to commit IP to GitHub: Empty response"
                   exit 1
               }
           } catch {
-              Write-Error "API Call Failed: $_"
+              # Detailed error logging
+              $responseStream = $_.Exception.Response.GetResponseStream()
+              $reader = New-Object System.IO.StreamReader($responseStream)
+              $responseBody = $reader.ReadToEnd()
+              Write-Error "API Call Failed. Status: $($_.Exception.Response.StatusCode.Value__)`nResponse Body: $responseBody"
               exit 1
           }
 
