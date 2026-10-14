@@ -1,1 +1,3 @@
-administrator
+ADMIN
+ADMINISTRATOR
+server
