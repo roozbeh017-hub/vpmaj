@@ -1,2 +1,2 @@
 administrator
-administrateur
+amministratore
